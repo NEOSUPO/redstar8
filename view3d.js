@@ -1,0 +1,1888 @@
+﻿import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { SSAOPass } from "three/addons/postprocessing/SSAOPass.js";
+import { lookupItem } from "./catalog.js?v=20261028d";
+import { flowById, gradeById, pressureMarks } from "./env.js?v=20261111u";
+import { centroid, distanceToBoundary, edgeGeometry, outlinePoints, pointInRoom } from "./geometry.js?v=20261022d";
+import { cutsForWall, hingePoint, leafSwing, openingCenter } from "./openings.js?v=20261022f";
+import { snapValue } from "./store.js?v=20261111u";
+import { counterTop, seatItems, shiftGuests } from "./surface.js?v=20261028d";
+
+const BRIGHTNESS = [0.45, 0.85, 1.25];
+const EXPOSURE = [0.72, 1.02, 1.32];
+const TILE_MM = 700;
+const PERSON_MM = 1630;
+const WALK_MPS = 1300;
+const BODY_REACH = 620;
+const STEP_MM = 680;
+// WebGL forward shaders + SSAO/shadow maps blow past texture-unit limits with many lights.
+const MAX_FIXTURE_SPOTS = 8;
+const MAX_FIXTURE_SHADOWS = 1;
+
+export function createView3d(canvas, store, ui) {
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+  const map = document.querySelector("#walk-map");
+  const mapCtx = map?.getContext("2d");
+  renderer.setClearColor(0xe4eeea);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(50, 1, 10, 200000);
+  camera.position.set(8000, 6000, 8000);
+  const controls = new OrbitControls(camera, canvas);
+  controls.target.set(4000, 0, 3000);
+  controls.maxPolarAngle = Math.PI * 0.49;
+  const sun = new THREE.DirectionalLight(0xffffff, 1.1);
+  sun.position.set(4000, 8000, 2000);
+  scene.add(sun);
+  scene.add(sun.target);
+  const ambient = new THREE.AmbientLight(0xffffff, 0.65);
+  scene.add(ambient);
+  const hemi = new THREE.HemisphereLight(0xd7e6ff, 0xe4d5c3, 0);
+  scene.add(hemi);
+  scene.add(new THREE.GridHelper(40000, 40, 0xb7bdc4, 0xc5ccd3));
+  const root = new THREE.Group();
+  scene.add(root);
+  let hq = false;
+  let composer = null;
+  let envMap = null;
+  let albedoMap = null;
+  let roughnessMap = null;
+  let mode = "sky";
+  let walk = null;
+  let actor = null;
+  let walker = null;
+  let look = null;
+  const held = new Set();
+  let turnModifier = false;
+  let underlayKey = "";
+  let underlayTexture = null;
+  let selection = null;
+  let spin = null;
+  let spinGroup = null;
+  let doorAmount = 1;
+  let doorTarget = 1;
+  const doorLeaves = [];
+  let slide = null;
+  let blank = null;
+  let walkerSelected = false;
+  let walkerDrag = null;
+  const raycaster = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  const spinPlane = new THREE.Plane();
+  const spinHit = new THREE.Vector3();
+
+  function resize() {
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    renderer.setPixelRatio(dpr);
+    renderer.setSize(Math.max(1, rect.width), Math.max(1, rect.height), false);
+    camera.aspect = rect.width / Math.max(1, rect.height);
+    camera.updateProjectionMatrix();
+  }
+
+  function surfaceMaps() {
+    if (!albedoMap) albedoMap = noiseTexture("color");
+    if (!roughnessMap) roughnessMap = noiseTexture("rough");
+    return { albedoMap, roughnessMap };
+  }
+
+  function noiseTexture(mode) {
+    const size = 128;
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const image = ctx.createImageData(size, size);
+    const data = image.data;
+    const hash = (x, y) => {
+      const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+      return n - Math.floor(n);
+    };
+    const noise = (x, y) => {
+      const x0 = Math.floor(x);
+      const y0 = Math.floor(y);
+      const fx = x - x0;
+      const fy = y - y0;
+      const sx = fx * fx * (3 - 2 * fx);
+      const sy = fy * fy * (3 - 2 * fy);
+      const a = hash(x0, y0);
+      const b = hash(x0 + 1, y0);
+      const c = hash(x0, y0 + 1);
+      const d = hash(x0 + 1, y0 + 1);
+      return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+    };
+    for (let y = 0; y < size; y += 1) {
+      for (let x = 0; x < size; x += 1) {
+        const n = noise(x / 18, y / 18) * 0.65 + noise(x / 7, y / 7) * 0.35;
+        const shade = mode === "rough" ? Math.round(80 + n * 150) : Math.round(236 + n * 19);
+        const i = (y * size + x) * 4;
+        data[i] = shade;
+        data[i + 1] = shade;
+        data[i + 2] = shade;
+        data[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(image, 0, 0);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.colorSpace = mode === "rough" ? THREE.NoColorSpace : THREE.SRGBColorSpace;
+    texture.anisotropy = 8;
+    return texture;
+  }
+
+  function finishMaterial({ color, kind, transparent = false, opacity = 1, side = THREE.FrontSide }) {
+    if (!hq) {
+      return new THREE.MeshLambertMaterial({
+        color,
+        transparent,
+        opacity,
+        depthWrite: !transparent,
+        side,
+      });
+    }
+    const presets = {
+      floor: { roughness: 0.9, metalness: 0, mapped: true },
+      wall: { roughness: 0.74, metalness: 0, mapped: true },
+      wood: { roughness: 0.55, metalness: 0.02, mapped: true },
+      metal: { roughness: 0.34, metalness: 0.78, mapped: false },
+      glass: { roughness: 0.06, metalness: 0, mapped: false },
+      veil: { roughness: 0.9, metalness: 0, mapped: false },
+      plain: { roughness: 0.64, metalness: 0.03, mapped: true },
+    };
+    const preset = presets[kind] || presets.plain;
+    const maps = surfaceMaps();
+    return new THREE.MeshStandardMaterial({
+      color,
+      roughness: preset.roughness,
+      metalness: preset.metalness,
+      map: preset.mapped ? maps.albedoMap : null,
+      roughnessMap: preset.mapped || kind === "metal" ? maps.roughnessMap : null,
+      envMapIntensity: kind === "metal" ? 0.7 : 0.2,
+      transparent,
+      opacity,
+      depthWrite: !transparent,
+      side,
+      shadowSide: THREE.FrontSide,
+    });
+  }
+
+  function tileUVs(geometry) {
+    if (!geometry?.attributes?.position) return;
+    geometry.computeVertexNormals();
+    const pos = geometry.attributes.position;
+    const norm = geometry.attributes.normal;
+    const uv = new Float32Array(pos.count * 2);
+    for (let i = 0; i < pos.count; i += 1) {
+      const nx = Math.abs(norm.getX(i));
+      const ny = Math.abs(norm.getY(i));
+      const nz = Math.abs(norm.getZ(i));
+      const x = pos.getX(i);
+      const y = pos.getY(i);
+      const z = pos.getZ(i);
+      let u;
+      let v;
+      if (nz >= nx && nz >= ny) {
+        u = x;
+        v = y;
+      } else if (ny >= nx) {
+        u = x;
+        v = z;
+      } else {
+        u = z;
+        v = y;
+      }
+      uv[i * 2] = u / TILE_MM;
+      uv[i * 2 + 1] = v / TILE_MM;
+    }
+    geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+  }
+
+  function dress(mesh, kind) {
+    if (!hq || !mesh) return;
+    if (kind === "floor" || kind === "wall" || kind === "wood" || kind === "plain") tileUVs(mesh.geometry);
+    mesh.castShadow = kind === "wall" || kind === "wood" || kind === "plain" || kind === "metal";
+    mesh.receiveShadow = kind === "floor" || kind === "wood" || kind === "plain" || kind === "metal";
+  }
+
+  function surfaceKind(entry, cat) {
+    const swing = cat?.swing || "";
+    const leaf = entry.leaf || cat?.leaf || "";
+    if (swing === "window" || leaf === "window") return "glass";
+    if (leaf === "door" || swing === "single" || swing === "double" || swing === "push" || swing === "slide") return "wood";
+    const id = String(entry.catalogId || "");
+    if (id === "pipe" || id === "elbow" || id === "board" || id === "reel") return "metal";
+    if (["bench", "sink", "balance", "chair", "cabinet", "toilet", "wash"].includes(id)) return "wood";
+    return "plain";
+  }
+
+  function ensureEnv() {
+    if (envMap) return envMap;
+    const probe = new THREE.PMREMGenerator(renderer);
+    const room = new RoomEnvironment();
+    envMap = probe.fromScene(room, 0.04).texture;
+    room.dispose();
+    probe.dispose();
+    return envMap;
+  }
+
+  function fitShadow(plan) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const room of plan.rooms || []) {
+      for (const point of room.points || []) {
+        minX = Math.min(minX, point.x);
+        minY = Math.min(minY, point.y);
+        maxX = Math.max(maxX, point.x);
+        maxY = Math.max(maxY, point.y);
+      }
+    }
+    if (!Number.isFinite(minX)) {
+      minX = 0;
+      minY = 0;
+      maxX = 8000;
+      maxY = 6000;
+    }
+    const cx = (minX + maxX) / 2;
+    const cz = (minY + maxY) / 2;
+    const span = Math.max(maxX - minX, maxY - minY, 3000) * 0.7 + 2200;
+    sun.position.set(cx + span * 0.9, span * 0.7, cz + span * 0.38);
+    sun.target.position.set(cx, 0, cz);
+    const cam = sun.shadow.camera;
+    cam.left = -span;
+    cam.right = span;
+    cam.top = span;
+    cam.bottom = -span;
+    cam.near = span * 0.05;
+    cam.far = span * 4;
+    cam.updateProjectionMatrix();
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.bias = -0.0002;
+    sun.shadow.normalBias = 24;
+    sun.shadow.radius = 3;
+  }
+
+  function applyLook(plan) {
+    hq = ui.tab === "present";
+    const worldLevel = clamp(Math.round(Number(ui.worldLightLevel) || 0), 0, 10);
+    const t = worldLevel / 10;
+    const worldOn = t > 0;
+    // 10 = former「明るい」. Fixture strength still needs a stable scale when world light is off.
+    const level = worldOn ? BRIGHTNESS[2] * t : BRIGHTNESS[1];
+    renderer.toneMapping = hq ? THREE.LinearToneMapping : THREE.NoToneMapping;
+    renderer.toneMappingExposure = hq ? (worldOn ? (EXPOSURE[2] / EXPOSURE[1]) * t : 1) : 1;
+    renderer.shadowMap.enabled = hq;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    if (hq) {
+      const dark = 0x05070a;
+      const litSky = 0xd4e3ee;
+      renderer.setClearColor(worldOn ? lerpColor(dark, litSky, t) : dark);
+    } else {
+      renderer.setClearColor(0xe4eeea);
+    }
+    sun.castShadow = hq && worldOn;
+    const lit = (plan.items || []).some((entry) => (entry.light || entry.catalogId === "light") && entry.lightOn !== false);
+    if (!worldOn) {
+      sun.intensity = 0;
+      ambient.intensity = 0;
+      hemi.intensity = 0;
+      scene.environment = null;
+    } else if (hq) {
+      sun.intensity = (lit ? 0.55 : 1.35) * t;
+      sun.color.set(0xfff1dd);
+      ambient.intensity = (lit ? 0.03 : 0.05) * t;
+      hemi.intensity = (lit ? 0.12 : 0.24) * t;
+      scene.environment = t >= 0.15 ? ensureEnv() : null;
+      fitShadow(plan);
+    } else {
+      sun.intensity = (lit ? 0.7 : 1.1) * level;
+      sun.color.set(0xffffff);
+      sun.position.set(4000, 8000, 2000);
+      sun.target.position.set(0, 0, 0);
+      ambient.intensity = (lit ? 0.28 : 0.55) * level;
+      hemi.intensity = 0;
+      scene.environment = null;
+    }
+    return hq ? 1 : level;
+  }
+
+  function lerpColor(a, b, t) {
+    const ar = (a >> 16) & 255;
+    const ag = (a >> 8) & 255;
+    const ab = a & 255;
+    const br = (b >> 16) & 255;
+    const bg = (b >> 8) & 255;
+    const bb = b & 255;
+    const r = Math.round(ar + (br - ar) * t);
+    const g = Math.round(ag + (bg - ag) * t);
+    const bl = Math.round(ab + (bb - ab) * t);
+    return (r << 16) | (g << 8) | bl;
+  }
+
+  function ensureComposer() {
+    if (composer) return;
+    composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    const pass = new SSAOPass(scene, camera, 512, 512);
+    // kernelRadius is view-space millimetres. min/max are normalized depth.
+    // The minimum skips flush wall seams and the line above a door frame.
+    pass.kernelRadius = 70;
+    pass.minDistance = 0.00035;
+    pass.maxDistance = 0.004;
+    composer.addPass(pass);
+    composer.addPass(new OutputPass());
+  }
+
+  let composerSize = "";
+
+  function paint() {
+    if (!hq) {
+      renderer.render(scene, camera);
+      return;
+    }
+    ensureComposer();
+    const rect = canvas.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const width = Math.max(1, Math.round(rect.width));
+    const height = Math.max(1, Math.round(rect.height));
+    const key = `${width}x${height}@${dpr}`;
+    if (key !== composerSize) {
+      composerSize = key;
+      composer.setPixelRatio(dpr);
+      composer.setSize(width, height);
+    }
+    composer.render();
+  }
+
+  function rebuild() {
+    spinGroup = null;
+    doorLeaves.length = 0;
+    while (root.children.length) root.remove(root.children[0]);
+    const plan = store.get();
+    const level = applyLook(plan);
+    const ceiling = plan.settings.ceiling;
+    ensureUnderlay(plan);
+    if (plan.underlay && underlayTexture) {
+      const plane = new THREE.Mesh(
+        new THREE.PlaneGeometry(plan.underlay.w, plan.underlay.h),
+        new THREE.MeshBasicMaterial({ map: underlayTexture, transparent: true, opacity: 0.85 }),
+      );
+      plane.rotation.x = -Math.PI / 2;
+      plane.position.set(plan.underlay.x + plan.underlay.w / 2, 1, plan.underlay.y + plan.underlay.h / 2);
+      root.add(plane);
+    }
+    for (const room of plan.rooms) addRoom(room, plan, ceiling);
+    addEnvArrows(plan);
+    const fixtureLights = [];
+    for (const entry of plan.items) {
+      if (ui.tab === "layout" && ui.showPlaced === false && !entry.openingId) continue;
+      addItem(entry, plan, ceiling, level, fixtureLights);
+    }
+    attachFixtureLights(fixtureLights, level);
+    const sole = selection?.kind === "item" && selection.ids.length === 1
+      ? plan.items.find((row) => row.id === selection.ids[0])
+      : null;
+    const soleLight = sole && !!(sole.light || sole.catalogId === "light");
+    if (sole && !sole.locked && !sole.openingId && sole.place !== "wall" && (ui.tab !== "layout" || ui.showPlaced !== false) && !(ui.tab === "present" && ui.showLights === false && soleLight)) addSpin(sole, plan, ceiling);
+  }
+
+  function addArrow(x1, y1, x2, y2, color, dashed) {
+    const height = 70;
+    const geom = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(x1, height, y1),
+      new THREE.Vector3(x2, height, y2),
+    ]);
+    const mat = dashed
+      ? new THREE.LineDashedMaterial({ color, dashSize: 200, gapSize: 140 })
+      : new THREE.LineBasicMaterial({ color });
+    const line = new THREE.Line(geom, mat);
+    if (dashed) line.computeLineDistances();
+    root.add(line);
+    const dx = x2 - x1;
+    const dz = y2 - y1;
+    const len = Math.hypot(dx, dz) || 1;
+    const head = new THREE.Mesh(new THREE.ConeGeometry(60, 200, 8), new THREE.MeshBasicMaterial({ color }));
+    head.position.set(x2, height, y2);
+    head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(dx / len, 0, dz / len));
+    root.add(head);
+  }
+
+  function addEnvArrows(plan) {
+    if (!envShown) return;
+    for (const flow of plan.flows || []) {
+      const spec = flowById(flow.kind);
+      addArrow(flow.x1, flow.y1, flow.x2, flow.y2, spec.color, spec.dash);
+    }
+    for (const mark of pressureMarks(plan)) addArrow(mark.x1, mark.y1, mark.x2, mark.y2, "#243040", false);
+  }
+
+  function addRoom(room, plan, ceiling) {
+    const lift = Number(room.raisedFloor) || 0;
+    const floorH = 40 + lift;
+    const floorGeom = floorGeometry(room, 0, floorH);
+    const floor = new THREE.Mesh(
+      floorGeom,
+      finishMaterial({ color: (envShown && gradeById(room.grade)?.color) || room.floorColor || room.color, kind: "floor" }),
+    );
+    dress(floor, "floor");
+    floor.rotation.x = -Math.PI / 2;
+    root.add(floor);
+    addWalls(room, plan, ceiling);
+    const drop = Number(room.dropCeiling) || 0;
+    if (drop > 40) {
+      const slab = new THREE.Mesh(
+        floorGeometry(room, plan.settings.wall, 20),
+        finishMaterial({
+          color: room.wallColor || "#e7edf2",
+          kind: "veil",
+          transparent: true,
+          opacity: 0.28,
+          side: THREE.DoubleSide,
+        }),
+      );
+      slab.rotation.x = -Math.PI / 2;
+      slab.position.y = ceiling - drop - 20;
+      root.add(slab);
+    }
+  }
+
+  function floorGeometry(room, inset, depth) {
+    const center = centroid(room);
+    const outline = outlinePoints(room, 50).map((point) => {
+      if (!inset) return point;
+      const vx = center.x - point.x;
+      const vy = center.y - point.y;
+      const len = Math.hypot(vx, vy) || 1;
+      return { x: point.x + (vx / len) * inset, y: point.y + (vy / len) * inset };
+    });
+    const shape = new THREE.Shape();
+    outline.forEach((point, index) => {
+      if (index === 0) shape.moveTo(point.x, -point.y);
+      else shape.lineTo(point.x, -point.y);
+    });
+    const geom = new THREE.ExtrudeGeometry(shape, { depth: Math.max(1, depth || 1), bevelEnabled: false });
+    return geom;
+  }
+
+  function addItem(entry, plan, ceiling, level, fixtureLights) {
+    if (entry.openingId) {
+      addLeaf(entry, plan);
+      return;
+    }
+    const cat = lookupItem(entry.catalogId, plan.customItems);
+    const host = entry.hostId ? plan.items.find((row) => row.id === entry.hostId) : null;
+    const room = roomFor(host || entry, plan);
+    const lift = Number(room?.raisedFloor) || 0;
+    const drop = Number(room?.dropCeiling) || 0;
+    const kind = surfaceKind(entry, cat);
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(entry.w, entry.h, entry.d),
+      finishMaterial({ color: entry.color || cat?.color || "#999999", kind }),
+    );
+    dress(mesh, kind);
+    const isLight = !!(entry.light || entry.catalogId === "light" || cat?.light);
+    const top = counterTop(plan.items, entry);
+    let y = lift + top + entry.h / 2;
+    if (isLight) {
+      const half = Math.max(50, entry.h) / 2;
+      const raw = Number(entry.z);
+      const fallback = Math.max(half + 200, ceiling - drop - half);
+      // Scene is millimetres. Near-floor leftovers are treated as ceiling mounts.
+      y = lift + (Number.isFinite(raw) && raw >= 500 ? raw : fallback);
+    } else if (entry.place === "ceiling") {
+      y = ceiling - drop - entry.h / 2;
+    } else if (entry.place === "wall") {
+      y = lift + (entry.z || entry.h / 2);
+    }
+    mesh.position.set(entry.x, y, entry.y);
+    mesh.rotation.y = (-entry.rot * Math.PI) / 180;
+    if (isLight && entry.lightOn !== false && mesh.material) {
+      mesh.material.emissive = new THREE.Color(entry.lightColor || "#fff4d6");
+      mesh.material.emissiveIntensity = hq ? 1.4 : 0.9;
+    }
+    tag(mesh, { pick: "item", id: entry.id }, chosen("item", entry.id));
+    const hideLightMesh = isLight && (
+      (ui.tab === "present" && ui.showLights === false)
+      || (ui.tab !== "present" && ui.showPlanLights === false)
+    );
+    if (!hideLightMesh) root.add(mesh);
+    if (isLight && entry.lightOn !== false && (ui.tab === "present" || ui.showPlanLights !== false)) {
+      fixtureLights.push({ entry, y, lift });
+    }
+  }
+
+  function attachFixtureLights(fixtureLights, level) {
+    if (!fixtureLights.length) return;
+    const cx = camera.position.x;
+    const cz = camera.position.z;
+    const ranked = fixtureLights.slice().sort((a, b) => {
+      const da = (a.entry.x - cx) ** 2 + (a.entry.y - cz) ** 2;
+      const db = (b.entry.x - cx) ** 2 + (b.entry.y - cz) ** 2;
+      return da - db;
+    });
+    const active = ranked.slice(0, MAX_FIXTURE_SPOTS);
+    // When many fixtures share the budget, keep total room energy roughly stable.
+    const share = Math.max(1, ranked.length / active.length);
+    active.forEach((item, index) => {
+      const entry = item.entry;
+      const dim = Math.min(20, Math.max(1, Number(entry.lightLevel) || 10)) / 10;
+      const strength = dim * level * (hq ? 2.4e6 : 1.4e6) * Math.min(2.5, Math.sqrt(share));
+      const height = Math.max(400, item.y - item.lift);
+      const fall = Math.max(2400, height + 1200);
+      const span = Math.max(entry.w, entry.d, 400);
+      const angle = Math.min(1.2, Math.max(0.45, Math.atan2(span * 1.1, height)));
+      const color = entry.lightColor || "#fff4d6";
+      const spot = new THREE.SpotLight(color, strength, fall * 1.5, angle, 0.5, 2);
+      spot.position.set(entry.x, item.y - Math.min(30, entry.h * 0.4), entry.y);
+      spot.target.position.set(entry.x, item.lift + 1, entry.y);
+      if (hq && index < MAX_FIXTURE_SHADOWS) {
+        spot.castShadow = true;
+        spot.shadow.mapSize.set(1024, 1024);
+        spot.shadow.bias = -0.00015;
+        spot.shadow.normalBias = 18;
+        spot.shadow.camera.near = 40;
+        spot.shadow.camera.far = fall * 1.6;
+      }
+      root.add(spot);
+      root.add(spot.target);
+    });
+  }
+
+  function addLeaf(entry, plan) {
+    const opening = (plan.openings || []).find((row) => row.id === entry.openingId);
+    const room = opening && plan.rooms.find((row) => row.id === opening.roomId);
+    if (!opening || !room) return;
+    const center = openingCenter(room, opening);
+    const wall = center.wall;
+    const lift = Number(room.raisedFloor) || 0;
+    const y = lift + opening.sill + opening.h / 2;
+    const cat = lookupItem(entry.catalogId, plan.customItems);
+    const swing = cat?.swing || (entry.leaf === "window" ? "window" : "single");
+    const leafH = opening.h * 0.96;
+    const tangent = wall.tangentAt(center.along);
+    if (swing === "window") {
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(opening.w, opening.h * 0.92, 28),
+        finishMaterial({ color: entry.color || "#9ec9e0", kind: "glass", transparent: true, opacity: 0.45 }),
+      );
+      mesh.position.set(center.x, y, center.y);
+      mesh.rotation.y = -tangent;
+      dress(mesh, "glass");
+      tag(mesh, { pick: "opening", id: opening.id }, chosen("opening", opening.id));
+      root.add(mesh);
+      return;
+    }
+    if (swing === "slide") {
+      const sign = entry.hinge === "end" ? 1 : -1;
+      const shift = sign * opening.w * 0.42;
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(opening.w * 0.92, leafH, 36),
+        finishMaterial({ color: entry.color || "#d7c4a8", kind: "wood" }),
+      );
+      const openX = center.x + Math.cos(tangent) * shift + wall.nx * 40;
+      const openZ = center.y + Math.sin(tangent) * shift + wall.ny * 40;
+      mesh.position.set(
+        center.x + (openX - center.x) * doorAmount,
+        y,
+        center.y + (openZ - center.y) * doorAmount,
+      );
+      mesh.rotation.y = -tangent;
+      dress(mesh, "wood");
+      tag(mesh, { pick: "opening", id: opening.id }, chosen("opening", opening.id));
+      root.add(mesh);
+      doorLeaves.push({ kind: "slide", mesh, x0: center.x, z0: center.y, x1: openX, z1: openZ, y });
+      return;
+    }
+    const hinges = swing === "double" ? ["start", "end"] : [entry.hinge === "end" ? "end" : "start"];
+    const leafW = (swing === "double" ? opening.w / 2 : opening.w) * 0.96;
+    for (const hinge of hinges) {
+      const pose = leafSwing(wall, hinge, swing);
+      const hp = hingePoint(room, opening, hinge);
+      const group = new THREE.Group();
+      group.position.set(hp.x, y, hp.y);
+      group.rotation.y = -(pose.closed + pose.delta * doorAmount);
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(leafW, leafH, 36),
+        finishMaterial({ color: entry.color || "#c9a27a", kind: "wood" }),
+      );
+      mesh.position.x = leafW / 2;
+      dress(mesh, "wood");
+      tag(mesh, { pick: "opening", id: opening.id }, chosen("opening", opening.id));
+      group.add(mesh);
+      root.add(group);
+      doorLeaves.push({ kind: "swing", group, closed: pose.closed, delta: pose.delta });
+    }
+  }
+
+  function addSpin(entry, plan, ceiling) {
+    const radius = Math.max(entry.w, entry.d) * 0.5 + 220;
+    const y = itemBaseY(entry, plan, ceiling) + 30;
+    const group = new THREE.Group();
+    group.userData.itemId = entry.id;
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(radius, 70, 8, 56),
+      new THREE.MeshBasicMaterial({ color: 0x1d6fd4, depthTest: false, transparent: true, opacity: 0.92 }),
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.set(entry.x, y, entry.y);
+    ring.renderOrder = 3;
+    ring.material.toneMapped = false;
+    tag(ring, { pick: "spin", id: entry.id }, false);
+    group.add(ring);
+    const nub = new THREE.Mesh(
+      new THREE.SphereGeometry(110, 12, 8),
+      new THREE.MeshBasicMaterial({ color: 0x1d6fd4, depthTest: false }),
+    );
+    const ang = (entry.rot * Math.PI) / 180;
+    nub.position.set(entry.x + Math.cos(ang) * radius, y, entry.y + Math.sin(ang) * radius);
+    nub.renderOrder = 4;
+    nub.material.toneMapped = false;
+    tag(nub, { pick: "spin", id: entry.id }, false);
+    group.add(nub);
+    root.add(group);
+    spinGroup = group;
+    syncSpinRoom();
+  }
+
+  function syncSpinRoom() {
+    if (!spinGroup) return;
+    if (mode !== "walk" || !walk) {
+      spinGroup.visible = true;
+      return;
+    }
+    const plan = store.get();
+    const entry = (plan.items || []).find((row) => row.id === spinGroup.userData.itemId);
+    spinGroup.visible = !!entry && sameRoomAsViewer(entry, plan, walk.x, walk.z);
+  }
+
+  function sameRoomAsViewer(entry, plan, x, z) {
+    const itemRoom = roomFor(entry, plan);
+    let here = null;
+    for (let i = (plan.rooms || []).length - 1; i >= 0; i -= 1) {
+      if (pointInRoom(plan.rooms[i], x, z)) {
+        here = plan.rooms[i];
+        break;
+      }
+    }
+    if (!itemRoom || !here) return false;
+    return itemRoom.id === here.id;
+  }
+
+  function itemBaseY(entry, plan, ceiling) {
+    const host = entry.hostId ? plan.items.find((row) => row.id === entry.hostId) : null;
+    const room = roomFor(host || entry, plan);
+    const lift = Number(room?.raisedFloor) || 0;
+    const drop = Number(room?.dropCeiling) || 0;
+    if (entry.light || entry.catalogId === "light") {
+      const half = Math.max(50, entry.h) / 2;
+      const raw = Number(entry.z);
+      const center = Number.isFinite(raw) && raw >= 500 ? raw : Math.max(half + 200, ceiling - drop - half);
+      return lift + center - half;
+    }
+    if (entry.place === "ceiling") return ceiling - drop - entry.h;
+    if (entry.place === "wall") return lift + (Number(entry.z) || 0);
+    return lift + counterTop(plan.items, entry);
+  }
+
+  function chosen(kind, id) {
+    return selection?.kind === kind && selection.ids.includes(id);
+  }
+
+  function tag(mesh, data, on) {
+    mesh.userData = data;
+    if (on && mesh.material?.emissive) {
+      mesh.material.emissive.set("#0060b0");
+      mesh.material.emissiveIntensity = 0.35;
+    }
+  }
+
+  function eventNdc(event) {
+    const rect = canvas.getBoundingClientRect();
+    ndc.x = ((event.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
+    ndc.y = -((event.clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
+  }
+
+  function rayHit(event) {
+    eventNdc(event);
+    raycaster.setFromCamera(ndc, camera);
+    const targets = actor?.visible ? [actor, ...root.children] : root.children;
+    const hits = raycaster.intersectObjects(targets, true);
+    for (const hit of hits) {
+      let obj = hit.object;
+      let visible = true;
+      let cursor = obj;
+      while (cursor && cursor !== root && cursor !== scene) {
+        if (!cursor.visible) visible = false;
+        cursor = cursor.parent;
+      }
+      if (!visible) continue;
+      while (obj && obj !== root && obj !== scene) {
+        if (obj.userData?.pick) return obj.userData;
+        obj = obj.parent;
+      }
+    }
+    return null;
+  }
+
+  function pointerOnPlane(event, y) {
+    eventNdc(event);
+    raycaster.setFromCamera(ndc, camera);
+    spinPlane.set(new THREE.Vector3(0, 1, 0), -y);
+    return raycaster.ray.intersectPlane(spinPlane, spinHit) ? spinHit.clone() : null;
+  }
+
+  function endGesture(event) {
+    const doneSpin = spin;
+    const doneSlide = slide;
+    const click = blank;
+    spin = null;
+    slide = null;
+    blank = null;
+    look = null;
+    walkerDrag = null;
+    if (mode !== "walk") controls.enabled = true;
+    if (doneSlide && !doneSlide.pending) {
+      store.mutate((draft) => {
+        const guests = draft.items.filter((item) => item.hostId === doneSlide.id).map((item) => item.id);
+        seatItems(draft, [doneSlide.id, ...guests]);
+      });
+    }
+    const done = doneSlide || doneSpin;
+    if (done && !done.pending) {
+      ui?.select({ kind: "item", ids: [done.id] });
+      return;
+    }
+    if (!click || event?.type !== "pointerup") return;
+    const dx = event.clientX - click.x;
+    const dy = event.clientY - click.y;
+    if (dx * dx + dy * dy <= 36) {
+      walkerSelected = false;
+      markWalker();
+      if (selection) ui?.select(null);
+    }
+  }
+
+  function slideStarts(plan, id) {
+    const starts = {};
+    for (const entry of plan.items) {
+      if (entry.id === id || entry.hostId === id) starts[entry.id] = { x: entry.x, y: entry.y };
+    }
+    return starts;
+  }
+
+  function addWalls(room, plan, ceiling) {
+    const thickness = plan.settings.wall;
+    const lift = Number(room.raisedFloor) || 0;
+    const height = Math.max(100, ceiling - lift);
+    const material = finishMaterial({ color: room.wallColor || "#d7dde4", kind: "wall", side: THREE.DoubleSide });
+    const joins = room.points.map((_, index) => cornerJoin(room, index, thickness));
+    for (let index = 0; index < room.points.length; index += 1) {
+      const wall = edgeGeometry(room, index);
+      const cuts = cutsForWall(plan, room, index)
+        .map((cut) => ({
+          a: clamp(cut.a, 0, wall.length),
+          b: clamp(cut.b, 0, wall.length),
+          bottom: clamp(lift + cut.sill, lift, ceiling),
+          top: clamp(lift + cut.sill + cut.h, lift, ceiling),
+        }))
+        .filter((cut) => cut.b - cut.a > 20 && cut.top - cut.bottom > 20);
+      const boxes = wallPieces(0, wall.length, lift, height, mergeCuts(cuts));
+      const openEnds = {
+        start: wallEndOpen(plan, room, index - 1, true, thickness, ceiling),
+        end: wallEndOpen(plan, room, index + 1, false, thickness, ceiling),
+      };
+      for (const box of boxes) placeWallBox(wall, box, thickness, material, joins[index], joins[(index + 1) % room.points.length], openEnds);
+    }
+    for (let index = 0; index < joins.length; index += 1) {
+      const join = joins[index];
+      if (join.miter || cornerCutOpen(plan, room, index, thickness)) continue;
+      if (Math.abs(polygonArea([join.vertex, join.innerB, join.innerA])) < 8) continue;
+      addWallPrism(join.vertex, join.innerB, join.innerA, join.vertex, lift, lift + height, material, { start: true, end: true });
+    }
+  }
+
+  function placeWallBox(wall, box, thickness, material, startJoin, endJoin, openEnds) {
+    const len = box.len;
+    const steps = wall.arc ? Math.max(1, Math.ceil(len / 220)) : 1;
+    const span = box.mid - len / 2;
+    const y0 = box.y - box.h / 2;
+    const y1 = box.y + box.h / 2;
+    for (let i = 0; i < steps; i += 1) {
+      const a = span + (len * i) / steps;
+      const b = span + (len * (i + 1)) / steps;
+      if (wall.arc) {
+        const mid = (a + b) / 2;
+        const point = wall.pointAt(mid);
+        const normal = wall.inwardAt(mid);
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(Math.max(8, b - a), box.h, thickness), material);
+        mesh.position.set(point.x + normal.x * thickness / 2, box.y, point.y + normal.y * thickness / 2);
+        mesh.rotation.y = -wall.tangentAt(mid);
+        dress(mesh, "wall");
+        root.add(mesh);
+        continue;
+      }
+      const normal = wall.inwardAt(wall.length / 2);
+      const endOf = (along, atStart) => {
+        const point = wall.pointAt(along);
+        return {
+          outer: point,
+          inner: { x: point.x + normal.x * thickness, y: point.y + normal.y * thickness },
+          cap: atStart,
+        };
+      };
+      const left = endOf(a, a <= 1);
+      const right = endOf(b, false);
+      const startJoined = left.cap && startJoin && !openEnds?.start;
+      const endJoined = b >= wall.length - 1 && endJoin && !openEnds?.end;
+      const o0 = startJoined ? startJoin.vertex : left.outer;
+      const i0 = startJoined ? joinInner(startJoin, "start") : left.inner;
+      const o1 = endJoined ? endJoin.vertex : right.outer;
+      const i1 = endJoined ? joinInner(endJoin, "end") : right.inner;
+      if (polygonArea([o0, i0, i1, o1]) < 8) continue;
+      addWallPrism(o0, i0, i1, o1, y0, y1, material, {
+        start: !startJoined,
+        end: !endJoined,
+      });
+    }
+  }
+
+  function cornerJoin(room, vertexIndex, thickness) {
+    const prev = edgeGeometry(room, vertexIndex - 1);
+    const next = edgeGeometry(room, vertexIndex);
+    const vertex = next.a;
+    const nA = prev.inwardAt(prev.length);
+    const nB = next.inwardAt(0);
+    const tA = angleVector(prev.tangentAt(prev.length));
+    const tB = angleVector(next.tangentAt(0));
+    const innerA = { x: vertex.x + nA.x * thickness, y: vertex.y + nA.y * thickness };
+    const innerB = { x: vertex.x + nB.x * thickness, y: vertex.y + nB.y * thickness };
+    const hit = lineIntersect(innerA, tA, innerB, tB);
+    const offset = hit ? { x: hit.x - vertex.x, y: hit.y - vertex.y } : null;
+    const inward = offset && dot(offset, nA) > thickness * 0.2 && dot(offset, nB) > thickness * 0.2;
+    const near = offset && Math.hypot(offset.x, offset.y) <= thickness * 4;
+    if (hit && inward && near) return { vertex, inner: hit, innerA, innerB, miter: true };
+    return { vertex, innerA, innerB, miter: false };
+  }
+
+  function joinInner(join, side) {
+    if (join.miter) return join.inner;
+    return side === "start" ? join.innerB : join.innerA;
+  }
+
+  function wallEndOpen(plan, room, edgeIndex, atEnd, thickness, ceiling) {
+    const count = room.points.length;
+    const index = ((edgeIndex % count) + count) % count;
+    const edge = edgeGeometry(room, index);
+    const limit = ceiling - 80;
+    return cutsForWall(plan, room, index).some((cut) => {
+      const reaches = atEnd ? cut.b > edge.length - thickness - 20 : cut.a < thickness + 20;
+      const sill = Number(cut.sill) || 0;
+      return reaches && sill < 80 && sill + (Number(cut.h) || 0) >= limit;
+    });
+  }
+
+  function cornerCutOpen(plan, room, vertexIndex, thickness) {
+    const prev = edgeGeometry(room, vertexIndex - 1);
+    const next = edgeGeometry(room, vertexIndex);
+    const prevCuts = cutsForWall(plan, room, (vertexIndex - 1 + room.points.length) % room.points.length);
+    const nextCuts = cutsForWall(plan, room, vertexIndex % room.points.length);
+    const open = (cut) => (Number(cut.sill) || 0) < 80;
+    return prevCuts.some((cut) => open(cut) && cut.b > prev.length - thickness - 20) || nextCuts.some((cut) => open(cut) && cut.a < thickness + 20);
+  }
+
+  function addWallPrism(o0, i0, i1, o1, y0, y1, material, caps) {
+    const positions = [];
+    const p = (point, y) => [point.x, y, point.y];
+    const top = [p(o0, y1), p(i0, y1), p(i1, y1), p(o1, y1)];
+    const low = [p(o0, y0), p(i0, y0), p(i1, y0), p(o1, y0)];
+    const push = (a, b, c) => {
+      const abx = b[0] - a[0];
+      const aby = b[1] - a[1];
+      const abz = b[2] - a[2];
+      const acx = c[0] - a[0];
+      const acy = c[1] - a[1];
+      const acz = c[2] - a[2];
+      const cx = aby * acz - abz * acy;
+      const cy = abz * acx - abx * acz;
+      const cz = abx * acy - aby * acx;
+      if (cx * cx + cy * cy + cz * cz < 1) return;
+      positions.push(...a, ...b, ...c);
+    };
+    push(top[0], top[1], top[2]);
+    push(top[0], top[2], top[3]);
+    const sides = [[0, 3], [2, 1]];
+    if (caps?.end) sides.push([3, 2]);
+    if (caps?.start) sides.push([1, 0]);
+    for (const [from, to] of sides) {
+      if (Math.hypot(low[from][0] - low[to][0], low[from][2] - low[to][2]) < 0.5) continue;
+      push(low[from], low[to], top[to]);
+      push(low[from], top[to], top[from]);
+    }
+    if (positions.length < 9) return;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geometry.computeVertexNormals();
+    const mesh = new THREE.Mesh(geometry, material);
+    dress(mesh, "wall");
+    root.add(mesh);
+  }
+
+  function mergeCuts(cuts) {
+    const sorted = [...cuts].sort((p, q) => p.a - q.a);
+    const merged = [];
+    for (const cut of sorted) {
+      const last = merged[merged.length - 1];
+      if (last && cut.a <= last.b) {
+        last.b = Math.max(last.b, cut.b);
+        last.bottom = Math.min(last.bottom, cut.bottom);
+        last.top = Math.max(last.top, cut.top);
+      } else merged.push({ ...cut });
+    }
+    return merged;
+  }
+
+  function wallPieces(start, end, base, height, cuts) {
+    const boxes = [];
+    const full = (a, b) => boxes.push({ mid: (a + b) / 2, len: b - a, y: base + height / 2, h: height });
+    const band = (a, b, low, high) => boxes.push({ mid: (a + b) / 2, len: b - a, y: (low + high) / 2, h: high - low });
+    let cursor = start;
+    for (const cut of cuts) {
+      if (cut.a > cursor + 10) full(cursor, cut.a);
+      if (cut.bottom - base > 10) band(cut.a, cut.b, base, cut.bottom);
+      if (base + height - cut.top > 10) band(cut.a, cut.b, cut.top, base + height);
+      cursor = Math.max(cursor, cut.b);
+    }
+    if (end > cursor + 10) full(cursor, end);
+    return boxes;
+  }
+
+  function ensureUnderlay(plan) {
+    const href = plan.underlay?.href;
+    if (!href || href === underlayKey) return;
+    underlayKey = href;
+    const image = new Image();
+    image.onload = () => {
+      underlayTexture = new THREE.Texture(image);
+      underlayTexture.needsUpdate = true;
+      underlayTexture.colorSpace = THREE.SRGBColorSpace;
+      rebuild();
+    };
+    image.src = href;
+  }
+
+  function eyeY(x, z) {
+    return 1600 + floorLift(x, z);
+  }
+
+  function floorLift(x, z) {
+    const plan = store.get();
+    let lift = 0;
+    for (const room of plan.rooms || []) {
+      if (pointInRoom(room, x, z)) lift = Math.max(lift, Number(room.raisedFloor) || 0);
+    }
+    return lift;
+  }
+
+  function personShown() {
+    return ui.tab === "present" && mode !== "walk" && ui.showWalker !== false && !!actor;
+  }
+
+  function canWalk(x, z) {
+    const plan = store.get();
+    if (blocksFurniture(plan, x, z)) return false;
+    const rooms = plan.rooms || [];
+    if (!rooms.length) return true;
+    if (inDoorway(plan, x, z)) return true;
+    const wall = Math.max(80, Number(plan.settings?.wall) || 150);
+    return rooms.some((room) => pointInRoom(room, x, z) && distanceToBoundary(room, x, z) >= wall + BODY_REACH);
+  }
+
+  function inDoorway(plan, x, z) {
+    if (doorAmount <= 0.45) return false;
+    const wallT = Math.max(80, Number(plan.settings?.wall) || 150);
+    for (const opening of plan.openings || []) {
+      if ((Number(opening.sill) || 0) >= 80) continue;
+      const room = (plan.rooms || []).find((row) => row.id === opening.roomId);
+      if (!room) continue;
+      const center = openingCenter(room, opening);
+      const edge = center.wall;
+      const half = (Number(opening.w) || 0) * 0.5;
+      let bestDist = Infinity;
+      let bestAlong = center.along;
+      for (let i = 0; i <= 8; i += 1) {
+        const along = center.along - half + ((half * 2) * i) / 8;
+        const point = edge.pointAt(along);
+        const dist = Math.hypot(point.x - x, point.y - z);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestAlong = along;
+        }
+      }
+      if (Math.abs(bestAlong - center.along) > half + 220) continue;
+      if (bestDist <= wallT + BODY_REACH + 160) return true;
+    }
+    return false;
+  }
+
+  function blocksFurniture(plan, x, z) {
+    for (const entry of plan.items || []) {
+      if (entry.openingId || entry.hostId) continue;
+      if (entry.place === "wall" || entry.place === "ceiling") continue;
+      const w = Number(entry.w) || 0;
+      const d = Number(entry.d) || 0;
+      if (w < 80 || d < 80) continue;
+      const hw = w * 0.5 + BODY_REACH;
+      const hd = d * 0.5 + BODY_REACH;
+      const rot = ((Number(entry.rot) || 0) * Math.PI) / 180;
+      const dx = x - entry.x;
+      const dy = z - entry.y;
+      const cos = Math.cos(rot);
+      const sin = Math.sin(rot);
+      const lx = dx * cos + dy * sin;
+      const ly = -dx * sin + dy * cos;
+      if (Math.abs(lx) <= hw && Math.abs(ly) <= hd) return true;
+    }
+    return false;
+  }
+
+  function ensureWalker() {
+    if (walker) return walker;
+    const rooms = store.get().rooms || [];
+    const spot = rooms.length ? centroid(rooms[0]) : { x: 3000, y: 2000 };
+    walker = { x: spot.x, z: spot.y, yaw: 0, phase: 0, moving: false };
+    return walker;
+  }
+
+  function poseActor() {
+    if (!actor) return;
+    const show = personShown();
+    actor.visible = show;
+    if (!show) return;
+    const body = ensureWalker();
+    const lift = floorLift(body.x, body.z);
+    const bob = body.moving ? Math.abs(Math.sin(body.phase)) * 22 : 0;
+    actor.position.set(body.x, lift + bob, body.z);
+    actor.rotation.y = body.yaw;
+    actor.rotation.x = body.moving ? Math.sin(body.phase) * 0.04 : 0;
+    actor.rotation.z = body.moving ? Math.sin(body.phase * 0.5) * 0.035 : 0;
+    markWalker();
+  }
+
+  function markWalker() {
+    const mesh = actor?.children?.[0];
+    if (!mesh?.material?.emissive) return;
+    if (walkerSelected && personShown()) {
+      mesh.material.emissive.set("#0060b0");
+      mesh.material.emissiveIntensity = 0.35;
+    } else {
+      mesh.material.emissive.set("#000000");
+      mesh.material.emissiveIntensity = 0;
+    }
+  }
+
+  function moveWalker(x, z, opts = {}) {
+    const body = ensureWalker();
+    const dx = x - body.x;
+    const dz = z - body.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 1) return;
+    // Mouse drag in report Sky ignores walls/furniture so the figure can be placed freely.
+    if (opts.collide === false) {
+      body.x = x;
+      body.z = z;
+      poseActor();
+      return;
+    }
+    const step = 40;
+    let cx = body.x;
+    let cz = body.z;
+    const count = Math.ceil(dist / step);
+    for (let i = 1; i <= count; i += 1) {
+      const t = Math.min(1, (i * step) / dist);
+      const nx = body.x + dx * t;
+      const nz = body.z + dz * t;
+      if (canWalk(nx, nz)) {
+        cx = nx;
+        cz = nz;
+      } else if (canWalk(nx, cz)) {
+        cx = nx;
+      } else if (canWalk(cx, nz)) {
+        cz = nz;
+      } else break;
+    }
+    body.x = cx;
+    body.z = cz;
+    poseActor();
+  }
+
+  function accessorArray(gltf, binStart, buffer, index, components) {
+    const acc = gltf.accessors[index];
+    const bv = gltf.bufferViews[acc.bufferView];
+    const start = binStart + (bv.byteOffset || 0) + (acc.byteOffset || 0);
+    if (acc.componentType === 5125) return new Uint32Array(buffer, start, acc.count);
+    if (acc.componentType === 5123) return new Uint16Array(buffer, start, acc.count);
+    return new Float32Array(buffer, start, acc.count * components);
+  }
+
+  async function loadActor() {
+    const response = await fetch("./models/arun-light.glb");
+    if (!response.ok) return;
+    const buffer = await response.arrayBuffer();
+    const view = new DataView(buffer);
+    const jsonLen = view.getUint32(12, true);
+    const gltf = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 20, jsonLen)));
+    const binStart = 28 + jsonLen;
+    const prim = gltf.meshes[0].primitives[0];
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(accessorArray(gltf, binStart, buffer, prim.attributes.POSITION, 3), 3));
+    geometry.setAttribute("normal", new THREE.BufferAttribute(accessorArray(gltf, binStart, buffer, prim.attributes.NORMAL, 3), 3));
+    geometry.setAttribute("uv", new THREE.BufferAttribute(accessorArray(gltf, binStart, buffer, prim.attributes.TEXCOORD_0, 2), 2));
+    geometry.setIndex(new THREE.BufferAttribute(accessorArray(gltf, binStart, buffer, prim.indices, 1), 1));
+    geometry.computeBoundingBox();
+    const box = geometry.boundingBox;
+    const scale = PERSON_MM / Math.max(1, box.max.y - box.min.y);
+    const image = gltf.images[0];
+    const imageView = gltf.bufferViews[image.bufferView];
+    const jpeg = buffer.slice(binStart + (imageView.byteOffset || 0), binStart + (imageView.byteOffset || 0) + imageView.byteLength);
+    const texture = new THREE.Texture(await createImageBitmap(new Blob([jpeg], { type: image.mimeType || "image/jpeg" })));
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.flipY = false;
+    texture.anisotropy = 8;
+    texture.needsUpdate = true;
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+      map: texture,
+      roughness: 0.86,
+      metalness: 0,
+      side: THREE.DoubleSide,
+    }));
+    mesh.scale.setScalar(scale);
+    mesh.position.y = -box.min.y * scale;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.userData = { pick: "walker" };
+    actor = new THREE.Group();
+    actor.add(mesh);
+    scene.add(actor);
+    ensureWalker();
+    poseActor();
+  }
+
+  function applyWalk() {
+    if (!walk) return;
+    const eye = eyeY(walk.x, walk.z);
+    const dist = 3000;
+    const cp = Math.cos(walk.pitch);
+    camera.position.set(walk.x, eye, walk.z);
+    controls.target.set(
+      walk.x + Math.sin(walk.yaw) * cp * dist,
+      eye + Math.sin(walk.pitch) * dist,
+      walk.z + Math.cos(walk.yaw) * cp * dist,
+    );
+    camera.lookAt(controls.target);
+    syncSpinRoom();
+  }
+
+  function walkFromCamera() {
+    const faceX = controls.target.x - camera.position.x;
+    const faceZ = controls.target.z - camera.position.z;
+    const horiz = Math.hypot(faceX, faceZ) || 1;
+    return {
+      x: camera.position.x,
+      z: camera.position.z,
+      yaw: Math.atan2(faceX, faceZ),
+      pitch: clamp(Math.atan2(controls.target.y - camera.position.y, horiz), -1.05, 0.7),
+    };
+  }
+
+  function frame(now) {
+    const dt = Math.min(0.05, (now - (frame.last || now)) / 1000);
+    let stepped = false;
+    if (mode === "walk" && walk && held.size) {
+      const turnLeft = held.has("q") || (turnModifier && held.has("arrowleft"));
+      const turnRight = held.has("e") || (turnModifier && held.has("arrowright"));
+      let forward = 0;
+      let side = 0;
+      if (held.has("w") || held.has("arrowup")) forward += 1;
+      if (held.has("s") || held.has("arrowdown")) forward -= 1;
+      if (!turnRight && (held.has("d") || held.has("arrowright"))) side += 1;
+      if (!turnLeft && (held.has("a") || held.has("arrowleft"))) side -= 1;
+      const len = Math.hypot(forward, side);
+      if (len) {
+        const speed = (held.has("shift") ? 4200 : 1800) * dt;
+        walk.x += (Math.sin(walk.yaw) * forward - Math.cos(walk.yaw) * side) / len * speed;
+        walk.z += (Math.cos(walk.yaw) * forward + Math.sin(walk.yaw) * side) / len * speed;
+        stepped = true;
+      }
+      if (turnLeft) walk.yaw += 1.5 * dt;
+      if (turnRight) walk.yaw -= 1.5 * dt;
+      if (len || turnLeft || turnRight) applyWalk();
+    }
+    if (mode === "sky" && ui.tab === "present" && !canvas.hidden) driveActor(dt);
+    else if (walker && !stepped) walker.moving = false;
+    poseActor();
+    if (doorLeaves.length && Math.abs(doorAmount - doorTarget) > 0.001) {
+      const step = 1.8 * dt;
+      doorAmount = doorAmount < doorTarget ? Math.min(doorTarget, doorAmount + step) : Math.max(doorTarget, doorAmount - step);
+      poseDoors();
+    }
+    frame.last = now;
+    paint();
+    syncWalkMap();
+    requestAnimationFrame(frame);
+  }
+
+  function poseDoors() {
+    for (const leaf of doorLeaves) {
+      if (leaf.kind === "swing") {
+        leaf.group.rotation.y = -(leaf.closed + leaf.delta * doorAmount);
+        continue;
+      }
+      leaf.mesh.position.set(
+        leaf.x0 + (leaf.x1 - leaf.x0) * doorAmount,
+        leaf.y,
+        leaf.z0 + (leaf.z1 - leaf.z0) * doorAmount,
+      );
+    }
+  }
+
+  function toggleDoors() {
+    doorTarget = doorTarget < 0.5 ? 1 : 0;
+    return doorTarget === 1;
+  }
+
+  function syncWalkMap() {
+    if (!map) return;
+    const show = mode === "walk" && walk && !canvas.hidden;
+    map.hidden = !show;
+    if (show) drawWalkMap();
+  }
+
+  function mapProjection() {
+    const width = map.clientWidth || 200;
+    const height = map.clientHeight || 150;
+    const plan = store.get();
+    const rooms = plan.rooms || [];
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const room of rooms) {
+      minX = Math.min(minX, room.x);
+      minY = Math.min(minY, room.y);
+      maxX = Math.max(maxX, room.x + room.w);
+      maxY = Math.max(maxY, room.y + room.h);
+    }
+    if (!Number.isFinite(minX)) {
+      minX = walk.x - 4000;
+      minY = walk.z - 3000;
+      maxX = walk.x + 4000;
+      maxY = walk.z + 3000;
+    }
+    const margin = 14;
+    const spanX = Math.max(maxX - minX, 1);
+    const spanY = Math.max(maxY - minY, 1);
+    const scale = Math.min((width - margin * 2) / spanX, (height - margin * 2) / spanY);
+    const originX = (width - spanX * scale) / 2;
+    const originY = (height - spanY * scale) / 2;
+    return {
+      width,
+      height,
+      plan,
+      rooms,
+      minX,
+      minY,
+      scale,
+      originX,
+      originY,
+      sx: (x) => originX + (x - minX) * scale,
+      sy: (y) => originY + (y - minY) * scale,
+    };
+  }
+
+  function drawWalkMap() {
+    const dpr = window.devicePixelRatio || 1;
+    const frame = mapProjection();
+    const { width, height, plan, rooms, scale, sx, sy } = frame;
+    const bitmapW = Math.max(1, Math.floor(width * dpr));
+    const bitmapH = Math.max(1, Math.floor(height * dpr));
+    if (map.width !== bitmapW || map.height !== bitmapH) {
+      map.width = bitmapW;
+      map.height = bitmapH;
+    }
+    mapCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    mapCtx.clearRect(0, 0, width, height);
+    mapCtx.fillStyle = "#e6ebf1";
+    mapCtx.fillRect(0, 0, width, height);
+    for (const room of rooms) {
+      const outline = outlinePoints(room, 180);
+      if (outline.length < 3) continue;
+      mapCtx.beginPath();
+      outline.forEach((point, index) => {
+        const x = sx(point.x);
+        const y = sy(point.y);
+        if (index === 0) mapCtx.moveTo(x, y);
+        else mapCtx.lineTo(x, y);
+      });
+      mapCtx.closePath();
+      mapCtx.fillStyle = (envShown && gradeById(room.grade)?.color) || room.floorColor || room.color || "#f7f4ee";
+      mapCtx.fill();
+      mapCtx.lineJoin = "round";
+      mapCtx.lineWidth = Math.max(1.5, (Number(plan.settings?.wall) || 150) * scale);
+      mapCtx.strokeStyle = room.wallColor || "#8e98a3";
+      mapCtx.stroke();
+    }
+    const showItems = ui.tab !== "layout" || ui.showPlaced !== false;
+    for (const entry of showItems ? plan.items || [] : []) {
+      const itemW = Number(entry.w) || 0;
+      const itemD = Number(entry.d) || 0;
+      if (itemW < 40 || itemD < 40) continue;
+      const cat = lookupItem(entry.catalogId, plan.customItems);
+      mapCtx.save();
+      mapCtx.translate(sx(entry.x), sy(entry.y));
+      mapCtx.rotate(((Number(entry.rot) || 0) * Math.PI) / 180);
+      mapCtx.fillStyle = entry.color || cat?.color || "#8d97a3";
+      mapCtx.fillRect((-itemW * scale) / 2, (-itemD * scale) / 2, itemW * scale, itemD * scale);
+      mapCtx.restore();
+    }
+    for (const room of rooms) {
+      if (ui.tab !== "layout" || room.w * scale < 42 || room.h * scale < 18 || !room.name) continue;
+      const center = centroid(room);
+      mapCtx.save();
+      mapCtx.beginPath();
+      mapCtx.rect(sx(room.x) + 2, sy(room.y) + 2, Math.max(0, room.w * scale - 4), Math.max(0, room.h * scale - 4));
+      mapCtx.clip();
+      mapCtx.fillStyle = "#243040";
+      mapCtx.font = "10px sans-serif";
+      mapCtx.textAlign = "center";
+      mapCtx.textBaseline = "middle";
+      mapCtx.fillText(room.name, sx(center.x), sy(center.y));
+      mapCtx.restore();
+    }
+    const px = sx(walk.x);
+    const py = sy(walk.z);
+    const aim = 16;
+    mapCtx.beginPath();
+    mapCtx.moveTo(px, py);
+    mapCtx.lineTo(px + Math.sin(walk.yaw) * aim, py + Math.cos(walk.yaw) * aim);
+    mapCtx.strokeStyle = "#d40000";
+    mapCtx.lineWidth = 2;
+    mapCtx.stroke();
+    drawStar(mapCtx, px, py);
+  }
+
+  map?.addEventListener("pointerdown", (event) => {
+    if (mode !== "walk" || !walk || canvas.hidden) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = map.getBoundingClientRect();
+    const frame = mapProjection();
+    const nextX = frame.minX + (event.clientX - rect.left - frame.originX) / frame.scale;
+    const nextZ = frame.minY + (event.clientY - rect.top - frame.originY) / frame.scale;
+    walk.x = nextX;
+    walk.z = nextZ;
+    applyWalk();
+    syncWalkMap();
+  });
+
+  function setMode(next) {
+    const enteringWalk = next === "walk" && mode !== "walk";
+    mode = next;
+    if (mode === "walk") {
+      controls.enabled = false;
+      if (enteringWalk) {
+        const faceX = controls.target.x - camera.position.x;
+        const faceZ = controls.target.z - camera.position.z;
+        const yaw = Math.atan2(faceX, faceZ);
+        const back = 1800;
+        walk = {
+          x: controls.target.x - Math.sin(yaw) * back,
+          z: controls.target.z - Math.cos(yaw) * back,
+          yaw,
+          pitch: -0.08,
+        };
+      } else if (!walk) walk = walkFromCamera();
+      applyWalk();
+      syncWalkMap();
+      return;
+    }
+    const stand = walk;
+    if (walker) walker.moving = false;
+    walk = null;
+    look = null;
+    controls.enabled = true;
+    controls.maxPolarAngle = Math.PI * 0.49;
+    if (stand) {
+      controls.target.set(stand.x, 0, stand.z);
+      camera.position.set(stand.x + 3200, 4200, stand.z + 3200);
+      controls.update();
+    }
+    syncWalkMap();
+    syncSpinRoom();
+  }
+
+  function fit() {
+    const plan = store.get();
+    const boxes = plan.rooms.length ? plan.rooms : [{ x: 0, y: 0, w: 6000, h: 4000 }];
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const room of boxes) {
+      minX = Math.min(minX, room.x);
+      minY = Math.min(minY, room.y);
+      maxX = Math.max(maxX, room.x + room.w);
+      maxY = Math.max(maxY, room.y + room.h);
+    }
+    const cx = (minX + maxX) / 2;
+    const cz = (minY + maxY) / 2;
+    const span = Math.max(maxX - minX, maxY - minY, 2000);
+    if (mode === "walk") {
+      const x = minX + Math.min(1200, span * 0.2);
+      const z = minY + Math.min(1200, span * 0.2);
+      walk = {
+        x,
+        z,
+        yaw: Math.atan2(cx - x, cz - z),
+        pitch: -0.08,
+      };
+      applyWalk();
+      return;
+    }
+    controls.target.set(cx, 0, cz);
+    camera.position.set(cx + span * 0.85, span * 0.95, cz + span * 0.85);
+    controls.update();
+  }
+
+  function capture() {
+    paint();
+    return renderer.domElement.toDataURL("image/png");
+  }
+
+  function zoomBy(factor) {
+    const next = Number(factor) || 1;
+    if (mode === "walk") {
+      camera.fov = clamp(camera.fov / next, 18, 80);
+      camera.updateProjectionMatrix();
+      return;
+    }
+    const offset = camera.position.clone().sub(controls.target);
+    const length = offset.length();
+    if (length < 1) return;
+    offset.setLength(clamp(length / next, 400, 80000));
+    camera.position.copy(controls.target).add(offset);
+    controls.update();
+  }
+
+  canvas.addEventListener("wheel", (event) => {
+    if (mode !== "walk" || !walk) return;
+    event.preventDefault();
+    zoomBy(event.deltaY > 0 ? 0.9 : 1.12);
+  }, { passive: false });
+  function moveKey(event) {
+    if (event.code === "Numpad8") return "arrowup";
+    if (event.code === "Numpad2") return "arrowdown";
+    if (event.code === "Numpad4") return "arrowleft";
+    if (event.code === "Numpad6") return "arrowright";
+    const key = event.key.toLowerCase();
+    if (["arrowup", "arrowdown", "arrowleft", "arrowright", "w", "a", "s", "d", "q", "e"].includes(key)) return key;
+    return "";
+  }
+
+  function driveActor(dt) {
+    const body = ensureWalker();
+    if (!actor || ui.showWalker === false || !held.size) {
+      body.moving = false;
+      return;
+    }
+    const turnLeft = turnModifier && held.has("arrowleft");
+    const turnRight = turnModifier && held.has("arrowright");
+    let forward = 0;
+    let side = 0;
+    if (held.has("w") || held.has("arrowup")) forward += 1;
+    if (held.has("s") || held.has("arrowdown")) forward -= 1;
+    if (!turnRight && (held.has("d") || held.has("arrowright"))) side += 1;
+    if (!turnLeft && (held.has("a") || held.has("arrowleft"))) side -= 1;
+    const len = Math.hypot(forward, side);
+    let moving = false;
+    if (len && !turnLeft && !turnRight) {
+      camera.updateMatrixWorld();
+      const basis = camera.matrixWorld.elements;
+      let fx = -basis[8];
+      let fz = -basis[10];
+      let rx = basis[0];
+      let rz = basis[2];
+      const fl = Math.hypot(fx, fz) || 1;
+      const rl = Math.hypot(rx, rz) || 1;
+      fx /= fl;
+      fz /= fl;
+      rx /= rl;
+      rz /= rl;
+      const speed = WALK_MPS * dt;
+      const mx = (fx * forward + rx * side) / len;
+      const mz = (fz * forward + rz * side) / len;
+      const nx = body.x + mx * speed;
+      const nz = body.z + mz * speed;
+      let nextX = body.x;
+      let nextZ = body.z;
+      if (canWalk(nx, nz)) {
+        nextX = nx;
+        nextZ = nz;
+      } else if (canWalk(nx, body.z)) {
+        nextX = nx;
+      } else if (canWalk(body.x, nz)) {
+        nextZ = nz;
+      }
+      const dx = nextX - body.x;
+      const dz = nextZ - body.z;
+      body.yaw = dx * dx + dz * dz > 0.01 ? Math.atan2(dx, dz) : Math.atan2(mx, mz);
+      if (dx * dx + dz * dz > 0.01) {
+        body.x = nextX;
+        body.z = nextZ;
+        body.phase += (speed / STEP_MM) * Math.PI * 2;
+        moving = true;
+      }
+    }
+    if (turnLeft) body.yaw += 1.5 * dt;
+    if (turnRight) body.yaw -= 1.5 * dt;
+    body.moving = moving;
+  }
+
+  window.addEventListener("keydown", (event) => {
+    if (document.querySelector("dialog[open]")) return;
+    if (event.target instanceof Element && event.target.closest("input, textarea, select")) return;
+    const onReport = ui.tab === "present" && !canvas.hidden;
+    if (onReport && event.key.toLowerCase() === "h" && !event.repeat && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      event.preventDefault();
+      ui.setShowWalker(ui.showWalker === false);
+      return;
+    }
+    const skyMove = onReport && mode === "sky" && ui.showWalker !== false;
+    if (skyMove) {
+      if (event.altKey || event.metaKey) return;
+      if (event.key === "Control") {
+        turnModifier = true;
+        return;
+      }
+      const key = moveKey(event);
+      if (!key || key === "q" || key === "e") return;
+      if (event.ctrlKey && key !== "arrowleft" && key !== "arrowright") return;
+      if (event.ctrlKey) turnModifier = true;
+      held.add(key);
+      event.preventDefault();
+      return;
+    }
+    if (mode !== "walk") return;
+    if (event.key === "Control") {
+      turnModifier = true;
+      return;
+    }
+    if (event.altKey || event.metaKey) return;
+    if (event.ctrlKey && event.key.toLowerCase() === "w") {
+      event.preventDefault();
+      return;
+    }
+    if (event.key.toLowerCase() === "shift") {
+      held.add("shift");
+      return;
+    }
+    const key = moveKey(event);
+    const withControl = key === "arrowleft" || key === "arrowright" || key === "arrowup" || key === "arrowdown" || key === "q" || key === "e";
+    if (event.ctrlKey && !withControl) return;
+    if (!key) return;
+    if (event.ctrlKey) turnModifier = true;
+    held.add(key);
+    if (event.shiftKey) held.add("shift");
+    event.preventDefault();
+  });
+  window.addEventListener("keyup", (event) => {
+    if (event.key === "Control") turnModifier = false;
+    const key = moveKey(event);
+    if (key) held.delete(key);
+    held.delete(event.key.toLowerCase());
+    if (!event.shiftKey) held.delete("shift");
+  });
+  window.addEventListener("blur", () => {
+    held.clear();
+    turnModifier = false;
+  });
+  window.addEventListener("resize", resize);
+  let envShown = false;
+  let hidePlaced = ui.tab === "layout" && ui.showPlaced === false;
+  store.subscribe(rebuild);
+  ui.subscribe(() => {
+    poseActor();
+    if (mode === "walk") applyWalk();
+    const nextHide = ui.tab === "layout" && ui.showPlaced === false;
+    const nextEnv = ui.tab === "env" || (ui.tab === "present" && ui.showEnv);
+    if ((ui.tab === "present") === hq && nextHide === hidePlaced && nextEnv === envShown) return;
+    hidePlaced = nextHide;
+    envShown = nextEnv;
+    rebuild();
+  });
+  resize();
+  rebuild();
+  fit();
+  ensureWalker();
+  loadActor();
+  frame(performance.now());
+
+  function getPose() {
+    return {
+      mode,
+      px: camera.position.x,
+      py: camera.position.y,
+      pz: camera.position.z,
+      tx: controls.target.x,
+      ty: controls.target.y,
+      tz: controls.target.z,
+    };
+  }
+
+  function setPose(pose) {
+    if (!pose) return;
+    camera.position.set(pose.px, pose.py, pose.pz);
+    controls.target.set(pose.tx, pose.ty, pose.tz);
+    mode = pose.mode === "walk" ? "walk" : "sky";
+    if (mode === "walk") {
+      controls.enabled = false;
+      walk = walkFromCamera();
+      applyWalk();
+    } else {
+      walk = null;
+      look = null;
+      controls.enabled = true;
+      controls.maxPolarAngle = Math.PI * 0.49;
+      controls.update();
+      syncSpinRoom();
+    }
+  }
+
+  function setSelection(next) {
+    selection = next?.ids?.length ? { kind: next.kind, ids: [...next.ids] } : null;
+    if (selection) walkerSelected = false;
+    markWalker();
+    rebuild();
+  }
+
+  canvas.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    const hit = rayHit(event);
+    if (!hit) {
+      blank = selection || walkerSelected ? { x: event.clientX, y: event.clientY } : null;
+      if (mode === "walk" && walk) {
+        look = { x: event.clientX, y: event.clientY, yaw: walk.yaw, pitch: walk.pitch };
+        event.stopImmediatePropagation();
+        try { canvas.setPointerCapture(event.pointerId); } catch { /* capture is optional */ }
+      }
+      return;
+    }
+    blank = null;
+    if (hit.pick === "walker" && personShown()) {
+      const body = ensureWalker();
+      const point = pointerOnPlane(event, floorLift(body.x, body.z));
+      if (!point) return;
+      event.stopImmediatePropagation();
+      event.preventDefault();
+      walkerSelected = true;
+      walkerDrag = {
+        startX: body.x,
+        startZ: body.z,
+        originX: point.x,
+        originZ: point.z,
+        planeY: floorLift(body.x, body.z),
+      };
+      controls.enabled = false;
+      if (selection) ui?.select(null);
+      else markWalker();
+      try { canvas.setPointerCapture(event.pointerId); } catch { /* capture is optional */ }
+      return;
+    }
+    if (hit.pick === "spin") {
+      const entry = store.get().items.find((row) => row.id === hit.id);
+      if (!entry || entry.locked) return;
+      const point = pointerOnPlane(event, itemBaseY(entry, store.get(), store.get().settings.ceiling) + 30);
+      if (!point) return;
+      event.stopImmediatePropagation();
+      event.preventDefault();
+      spin = {
+        id: entry.id,
+        startRot: Number(entry.rot) || 0,
+        startAngle: Math.atan2(point.z - entry.y, point.x - entry.x),
+        pending: true,
+      };
+      try { canvas.setPointerCapture(event.pointerId); } catch { /* capture is optional */ }
+      return;
+    }
+    if (hit.pick === "item") {
+      const entry = store.get().items.find((row) => row.id === hit.id);
+      const already = selection?.kind === "item" && selection.ids.length === 1 && selection.ids[0] === hit.id;
+      if (already && entry && !entry.locked && !entry.openingId && entry.place !== "wall") {
+        const point = pointerOnPlane(event, itemBaseY(entry, store.get(), store.get().settings.ceiling) + 30);
+        if (point) {
+          event.stopImmediatePropagation();
+          event.preventDefault();
+          slide = {
+            id: entry.id,
+            startX: entry.x,
+            startY: entry.y,
+            originX: point.x,
+            originZ: point.z,
+            starts: slideStarts(store.get(), entry.id),
+            pending: true,
+          };
+          try { canvas.setPointerCapture(event.pointerId); } catch { /* capture is optional */ }
+          return;
+        }
+      }
+    }
+    event.stopImmediatePropagation();
+    if (ui?.tool !== "select") ui?.setTool("select");
+    if (hit.pick === "opening") ui?.select({ kind: "opening", ids: [hit.id] });
+    else ui?.select({ kind: "item", ids: [hit.id] });
+  }, true);
+
+  canvas.addEventListener("pointermove", (event) => {
+    if (look && walk) {
+      walk.yaw = look.yaw - (event.clientX - look.x) * 0.005;
+      walk.pitch = clamp(look.pitch - (event.clientY - look.y) * 0.004, -1.05, 0.7);
+      applyWalk();
+      return;
+    }
+    if (walkerDrag) {
+      const point = pointerOnPlane(event, walkerDrag.planeY);
+      if (!point) return;
+      const plan = store.get();
+      const steps = [plan.settings.module / plan.settings.division, (Number(plan.settings.wall) || 150) / 2];
+      const enabled = plan.settings.snap !== false;
+      const x = snapValue(walkerDrag.startX + (point.x - walkerDrag.originX), steps, enabled);
+      const z = snapValue(walkerDrag.startZ + (point.z - walkerDrag.originZ), steps, enabled);
+      moveWalker(x, z, { collide: false });
+      return;
+    }
+    if (slide) {
+      const plan = store.get();
+      const entry = plan.items.find((row) => row.id === slide.id);
+      if (!entry || entry.locked) {
+        endGesture();
+        return;
+      }
+      const point = pointerOnPlane(event, itemBaseY(entry, plan, plan.settings.ceiling) + 30);
+      if (!point) return;
+      const steps = [plan.settings.module / plan.settings.division, (Number(plan.settings.wall) || 150) / 2];
+      const enabled = plan.settings.snap !== false;
+      const x = snapValue(slide.startX + (point.x - slide.originX), steps, enabled);
+      const y = snapValue(slide.startY + (point.z - slide.originZ), steps, enabled);
+      if (Math.round(entry.x) === Math.round(x) && Math.round(entry.y) === Math.round(y)) return;
+      if (slide.pending) {
+        store.checkpoint();
+        slide.pending = false;
+      }
+      store.mutate((draft) => {
+        const row = draft.items.find((item) => item.id === slide.id);
+        if (!row || row.locked) return;
+        row.x = x;
+        row.y = y;
+        shiftGuests(draft, [row.id], slide.starts);
+      });
+      return;
+    }
+    if (!spin) return;
+    const plan = store.get();
+    const entry = plan.items.find((row) => row.id === spin.id);
+    if (!entry || entry.locked) {
+      endGesture();
+      return;
+    }
+    const point = pointerOnPlane(event, itemBaseY(entry, plan, plan.settings.ceiling) + 30);
+    if (!point) return;
+    let delta = Math.atan2(point.z - entry.y, point.x - entry.x) - spin.startAngle;
+    while (delta > Math.PI) delta -= Math.PI * 2;
+    while (delta < -Math.PI) delta += Math.PI * 2;
+    let rot = spin.startRot + (delta * 180) / Math.PI;
+    rot = Math.round(rot);
+    rot = ((rot % 360) + 360) % 360;
+    if (Math.abs((Number(entry.rot) || 0) - rot) < 0.5) return;
+    if (spin.pending) {
+      store.checkpoint();
+      spin.pending = false;
+    }
+    store.mutate((draft) => {
+      const row = draft.items.find((item) => item.id === spin.id);
+      if (!row || row.locked) return;
+      row.rot = rot;
+      const guests = draft.items.filter((item) => item.hostId === row.id).map((item) => item.id);
+      seatItems(draft, [row.id, ...guests]);
+    });
+  });
+
+  canvas.addEventListener("pointerup", endGesture);
+  canvas.addEventListener("pointercancel", endGesture);
+
+  return { setMode, resize, fit, zoomBy, getPose, setPose, capture, setSelection, toggleDoors };
+}
+
+function roomFor(entry, plan) {
+  if (entry.roomId) {
+    const named = plan.rooms.find((room) => room.id === entry.roomId);
+    if (named) return named;
+  }
+  for (let i = plan.rooms.length - 1; i >= 0; i -= 1) {
+    const room = plan.rooms[i];
+    if (pointInRoom(room, entry.x, entry.y)) return room;
+  }
+  return null;
+}
+
+function drawStar(ctx, x, y) {
+  const outer = 7;
+  const inner = 3;
+  ctx.beginPath();
+  for (let i = 0; i < 10; i += 1) {
+    const angle = -Math.PI / 2 + (i * Math.PI) / 5;
+    const radius = i % 2 === 0 ? outer : inner;
+    const px = x + Math.cos(angle) * radius;
+    const py = y + Math.sin(angle) * radius;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = "#e10600";
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1.5;
+  ctx.fill();
+  ctx.stroke();
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function angleVector(angle) {
+  return { x: Math.cos(angle), y: Math.sin(angle) };
+}
+
+function dot(a, b) {
+  return a.x * b.x + a.y * b.y;
+}
+
+function lineIntersect(p, d, q, e) {
+  const det = d.x * e.y - d.y * e.x;
+  if (Math.abs(det) < 1e-6) return null;
+  const s = ((q.x - p.x) * e.y - (q.y - p.y) * e.x) / det;
+  return { x: p.x + d.x * s, y: p.y + d.y * s };
+}
+
+function polygonArea(points) {
+  let sum = 0;
+  for (let i = 0; i < points.length; i += 1) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    sum += a.x * b.y - b.x * a.y;
+  }
+  return Math.abs(sum) / 2;
+}
