@@ -1,14 +1,14 @@
-import { bookToPlan, planToBook } from "./book.js?v=20261113a";
+﻿import { bookToPlan, planToBook } from "./book.js?v=20261113b";
 import { insertPoint, outlinePoints, removePoint, roomArea, scaleRoom, setEdgeArc } from "./geometry.js?v=20261022d";
 import { ROOM_TYPES, catalogTemplateCsv, categoryTree, importUserCatalog, loadSharedCatalog, lookupItem } from "./catalog.js?v=20261028d";
-import { bindEnv, envPanel } from "./env.js?v=20261113a";
-import { readTables, writeWorkbook } from "./excelio.js?v=20261113a";
+import { bindEnv, envPanel } from "./env.js?v=20261113b";
+import { readTables, writeWorkbook } from "./excelio.js?v=20261113b";
 import { attachLeaf, clampOpenings, hingeForHand, noteRemovedVertex, resizeOpening, splitEdgeOpenings } from "./openings.js?v=20261022f";
-import { bindPower, powerPanel } from "./power.js?v=20261113a";
-import { createStore, uid } from "./store.js?v=20261113a";
+import { bindPower, powerPanel } from "./power.js?v=20261113b";
+import { createStore, uid } from "./store.js?v=20261113b";
 import { seatItems } from "./surface.js?v=20261028d";
-import { mountSpecs } from "./specs.js?v=20261113a";
-import { createView2d } from "./view2d.js?v=20261113a";
+import { mountSpecs } from "./specs.js?v=20261113b";
+import { createView2d } from "./view2d.js?v=20261113b";
 
 const store = createStore();
 const ui = createController();
@@ -36,17 +36,17 @@ function paintFold(kind, folded) {
     document.querySelector(".workspace").classList.toggle("menu-folded", folded);
     const button = document.querySelector("#fold-menu");
     button.setAttribute("aria-expanded", String(!folded));
-    button.textContent = folded ? "繝代ロ繝ｫ" : "繝代ロ繝ｫ繧帝哩縺倥ｋ";
+    button.textContent = folded ? "パネル" : "パネルを閉じる";
   } else if (kind === "specs") {
     document.querySelector(".workspace").classList.toggle("specs-folded", folded);
     const button = document.querySelector("#fold-specs");
     button.setAttribute("aria-expanded", String(!folded));
-    button.textContent = folded ? "隲ｸ蜈・ｸ隕ｧ" : "隲ｸ蜈・ｸ隕ｧ繧帝哩縺倥ｋ";
+    button.textContent = folded ? "諸元一覧" : "諸元一覧を閉じる";
   } else {
     document.querySelector("#float-tools").classList.toggle("folded", folded);
     const button = document.querySelector("#fold-tools");
     button.setAttribute("aria-expanded", String(!folded));
-    button.textContent = folded ? "謫堺ｽ・ : "髢峨§繧・;
+    button.textContent = folded ? "操作" : "閉じる";
   }
   resizeViews();
 }
@@ -277,7 +277,7 @@ async function setMode(next) {
   document.querySelector("#mode-3d").classList.toggle("active", next === "3d");
   document.querySelector("#view-toggle").hidden = next !== "3d";
   if (next === "3d" && !view3d) {
-    const mod = await import("./view3d.js?v=20261113a");
+    const mod = await import("./view3d.js?v=20261113b");
     view3d = mod.createView3d(document.querySelector("#view3d"), store, ui);
     view3d.setSelection(ui.selection);
   }
@@ -297,7 +297,7 @@ function markViewMode(next) {
 function markDoors(open) {
   const button = document.querySelector("#doors");
   if (!button) return;
-  button.textContent = open ? "繝峨い繧帝哩縺倥ｋ" : "繝峨い繧帝幕縺・;
+  button.textContent = open ? "ドアを閉じる" : "ドアを開く";
   button.setAttribute("aria-pressed", open ? "true" : "false");
 }
 
@@ -389,13 +389,13 @@ function bindSidebar() {
     renderSidebar();
     const resultNote = sidebar.querySelector("#catalog-result");
     if (resultNote) resultNote.textContent = result.added
-      ? `${result.added}莉ｶ繧偵％縺ｮ繝悶Λ繧ｦ繧ｶ縺ｫ霑ｽ蜉縺励∪縺励◆縲りｨ伜・萓九・陦後・隱ｭ縺ｿ霎ｼ繧薙〒縺・∪縺帙ｓ縲Ａ
-      : "霑ｽ蜉縺ｧ縺阪ｋ陦後′縺ゅｊ縺ｾ縺帙ｓ縲りｨ伜・萓九・陦後→縲∝・騾壹き繧ｿ繝ｭ繧ｰ縺ｨ蜷後§id縺ｯ隱ｭ縺ｿ霎ｼ縺ｿ縺ｾ縺帙ｓ縲・;
+      ? `${result.added}件をこのブラウザに追加しました。記入例の行は読み込んでいません。`
+      : "追加できる行がありません。記入例の行と、共通カタログと同じidは読み込みません。";
   });
   sidebar.querySelector("#walker-toggle")?.addEventListener("click", () => ui.setShowWalker(!ui.showWalker));
   sidebar.querySelector("#lights-toggle")?.addEventListener("click", () => ui.setShowLights(!ui.showLights));
-  sidebar.querySelector("#show-dims")?.addEventListener("change", (event) => ui.setShowDims(event.target.checked));
   sidebar.querySelector("#show-plan-lights")?.addEventListener("change", (event) => ui.setShowPlanLights(event.target.checked));
+  sidebar.querySelector("#show-dims")?.addEventListener("change", (event) => ui.setShowDims(event.target.checked));
   sidebar.querySelector("#world-light-level")?.addEventListener("input", (event) => {
     ui.setWorldLightLevel(Number(event.target.value));
   });
@@ -430,45 +430,45 @@ function layoutPanel() {
   return `
     <div class="side-block">
       <div class="tool-row">
-        <button type="button" id="select-tool" class="${ui.tool === "select" ? "active" : ""}">驕ｸ謚・/ 遘ｻ蜍・/button>
-        <button type="button" id="placed-visible" class="${ui.showPlaced ? "active" : ""}" aria-pressed="${ui.showPlaced}">${ui.showPlaced ? "驟咲ｽｮ繧帝國縺・ : "驟咲ｽｮ繧定｡ｨ遉ｺ"}</button>
+        <button type="button" id="select-tool" class="${ui.tool === "select" ? "active" : ""}">選択 / 移動</button>
+        <button type="button" id="placed-visible" class="${ui.showPlaced ? "active" : ""}" aria-pressed="${ui.showPlaced}">${ui.showPlaced ? "配置を隠す" : "配置を表示"}</button>
       </div>
-      <h2>驛ｨ螻・/h2>
+      <h2>部屋</h2>
       ${rooms}
     </div>
     <div class="side-block">
-      <h2>髢句哨</h2>
-      <button type="button" data-opening="full" class="${ui.tool === "opening" && ui.openingPreset === "full" ? "active" : ""}">螢∵栢縺・/button>
-      <button type="button" data-opening="hole" class="${ui.tool === "opening" && ui.openingPreset === "hole" ? "active" : ""}">髢句哨驛ｨ</button>
-      <button type="button" data-opening="waist" class="${ui.tool === "opening" && ui.openingPreset === "waist" ? "active" : ""}">閻ｰ螢・/button>
-      <button type="button" id="measure" class="${ui.tool === "measure" ? "active" : ""}">險域ｸｬ</button>
+      <h2>開口</h2>
+      <button type="button" data-opening="full" class="${ui.tool === "opening" && ui.openingPreset === "full" ? "active" : ""}">壁抜き</button>
+      <button type="button" data-opening="hole" class="${ui.tool === "opening" && ui.openingPreset === "hole" ? "active" : ""}">開口部</button>
+      <button type="button" data-opening="waist" class="${ui.tool === "opening" && ui.openingPreset === "waist" ? "active" : ""}">腰壁</button>
+      <button type="button" id="measure" class="${ui.tool === "measure" ? "active" : ""}">計測</button>
     </div>
     <div class="side-block">
-      <h2>繧ｰ繝ｪ繝・ラ</h2>
-      <label>繝｢繧ｸ繝･繝ｼ繝ｫ
+      <h2>グリッド</h2>
+      <label>モジュール
         <select id="module">
-          <option value="910" ${plan.settings.module === 910 ? "selected" : ""}>蟆ｺ 910mm</option>
-          <option value="1000" ${plan.settings.module === 1000 ? "selected" : ""}>繝｡繝ｼ繧ｿ繝ｼ 1000mm</option>
-          <option value="1218" ${plan.settings.module === 1218 ? "selected" : ""}>繧､繝ｳ繝・1218mm</option>
-          <option value="custom" ${custom ? "selected" : ""}>莉ｻ諢城俣髫・/option>
+          <option value="910" ${plan.settings.module === 910 ? "selected" : ""}>尺 910mm</option>
+          <option value="1000" ${plan.settings.module === 1000 ? "selected" : ""}>メーター 1000mm</option>
+          <option value="1218" ${plan.settings.module === 1218 ? "selected" : ""}>インチ 1218mm</option>
+          <option value="custom" ${custom ? "selected" : ""}>任意間隔</option>
         </select>
       </label>
-      <label>莉ｻ諢城俣髫・mm<input id="custom-module" type="number" min="100" max="2000" value="${plan.settings.module}" /></label>
-      <label>蛻・牡
+      <label>任意間隔 mm<input id="custom-module" type="number" min="100" max="2000" value="${plan.settings.module}" /></label>
+      <label>分割
         <select id="division">
           ${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => `<option value="${n}" ${plan.settings.division === n ? "selected" : ""}>1/${n}</option>`).join("")}
         </select>
       </label>
     </div>
     <div class="side-block">
-      <h2>荳狗ｵｵ</h2>
-      <label>逕ｻ蜒・input id="underlay-file" type="file" accept="image/*" /></label>
+      <h2>下絵</h2>
+      <label>画像<input id="underlay-file" type="file" accept="image/*" /></label>
       ${underlay ? `
         <label>X mm<input data-underlay="x" type="number" value="${Math.round(underlay.x)}" /></label>
         <label>Y mm<input data-underlay="y" type="number" value="${Math.round(underlay.y)}" /></label>
-        <label>蟷・mm<input data-underlay="w" type="number" min="100" value="${Math.round(underlay.w)}" /></label>
-        <label>鬮倥＆ mm<input data-underlay="h" type="number" min="100" value="${Math.round(underlay.h)}" /></label>
-        <button type="button" id="underlay-clear">荳狗ｵｵ繧貞､悶☆</button>
+        <label>幅 mm<input data-underlay="w" type="number" min="100" value="${Math.round(underlay.w)}" /></label>
+        <label>高さ mm<input data-underlay="h" type="number" min="100" value="${Math.round(underlay.h)}" /></label>
+        <button type="button" id="underlay-clear">下絵を外す</button>
       ` : ""}
     </div>
     ${propsPanel()}
@@ -482,32 +482,32 @@ function itemPanel() {
   return `
     <div class="side-block">
       <div class="tool-row">
-        <button type="button" id="select-tool" class="${ui.tool === "select" ? "active" : ""}">驕ｸ謚・/ 遘ｻ蜍・/button>
+        <button type="button" id="select-tool" class="${ui.tool === "select" ? "active" : ""}">選択 / 移動</button>
       </div>
-      <h2>繧｢繧､繝・Β</h2>
+      <h2>アイテム</h2>
       <div class="tree">${renderTree(categoryTree(plan.customItems))}</div>
     </div>
     <div class="side-block">
-      <h2>蝎ｨ蜈ｷ繧定ｿｽ蜉</h2>
-      <label>蜷榊燕<input id="custom-name" type="text" /></label>
-      <label>蟷・mm<input id="custom-w" type="number" value="900" /></label>
-      <label>螂･陦・mm<input id="custom-d" type="number" value="600" /></label>
-      <label>鬮倥＆ mm<input id="custom-h" type="number" value="800" /></label>
-      <label>驟咲ｽｮ
+      <h2>器具を追加</h2>
+      <label>名前<input id="custom-name" type="text" /></label>
+      <label>幅 mm<input id="custom-w" type="number" value="900" /></label>
+      <label>奥行 mm<input id="custom-d" type="number" value="600" /></label>
+      <label>高さ mm<input id="custom-h" type="number" value="800" /></label>
+      <label>配置
         <select id="custom-place">
-          <option value="floor">蠎・/option>
-          <option value="wall">螢・/option>
-          <option value="ceiling">螟ｩ莠・/option>
-          <option value="free">閾ｪ逕ｱ</option>
+          <option value="floor">床</option>
+          <option value="wall">壁</option>
+          <option value="ceiling">天井</option>
+          <option value="free">自由</option>
         </select>
       </label>
-      <label>濶ｲ<input id="custom-color" type="color" value="#d9d3c5" /></label>
-      <label>蜊倅ｾ｡<input id="custom-price" type="number" min="0" placeholder="譛ｪ險ｭ螳・ /></label>
-      <label class="check"><input id="custom-light" type="checkbox" /> 辣ｧ譏・/label>
-      <label class="check"><input id="custom-home" type="checkbox" /> 險ｭ蛯・/label>
-      <button type="button" id="add-custom">繧ｫ繧ｿ繝ｭ繧ｰ縺ｫ霑ｽ蜉</button>
-      <label>險伜・萓九ｒ隱ｭ縺ｿ霎ｼ繧<input id="import-catalog" type="file" accept=".csv,text/csv" /></label>
-      <p id="catalog-note" class="note"><span id="catalog-result"></span><a href="#" id="catalog-template">險伜・萓九ｒ繝繧ｦ繝ｳ繝ｭ繝ｼ繝・/a></p>
+      <label>色<input id="custom-color" type="color" value="#d9d3c5" /></label>
+      <label>単価<input id="custom-price" type="number" min="0" placeholder="未設定" /></label>
+      <label class="check"><input id="custom-light" type="checkbox" /> 照明</label>
+      <label class="check"><input id="custom-home" type="checkbox" /> 設備</label>
+      <button type="button" id="add-custom">カタログに追加</button>
+      <label>記入例を読み込む<input id="import-catalog" type="file" accept=".csv,text/csv" /></label>
+      <p id="catalog-note" class="note"><span id="catalog-result"></span><a href="#" id="catalog-template">記入例をダウンロード</a></p>
     </div>
     ${propsPanel()}
     ${dimGuideToggle()}
@@ -518,7 +518,7 @@ function itemPanel() {
 function dimGuideToggle() {
   return `
     <div class="side-block">
-      <label class="check"><input id="show-dims" type="checkbox" ${ui.showDims ? "checked" : ""} /> 蟇ｸ豕輔ぎ繧､繝峨ｒ陦ｨ遉ｺ</label>
+      <label class="check"><input id="show-dims" type="checkbox" ${ui.showDims ? "checked" : ""} /> 寸法ガイドを表示</label>
     </div>
   `;
 }
@@ -526,7 +526,7 @@ function dimGuideToggle() {
 function planLightsToggle() {
   return `
     <div class="side-block">
-      <label class="check"><input id="show-plan-lights" type="checkbox" ${ui.showPlanLights ? "checked" : ""} /> 辣ｧ譏弱ｒ陦ｨ遉ｺ</label>
+      <label class="check"><input id="show-plan-lights" type="checkbox" ${ui.showPlanLights ? "checked" : ""} /> 照明を表示</label>
     </div>
   `;
 }
@@ -547,22 +547,22 @@ function presentPanel() {
   const views = plan.views.map((view) => `
     <div class="plan-row">
       <button type="button" data-view="${view.id}">${escapeHtml(view.name)}</button>
-      <button type="button" data-view-del="${view.id}">蜑企勁</button>
+      <button type="button" data-view-del="${view.id}">削除</button>
     </div>
   `).join("");
   return `
     <div class="side-block">
-      <h2>隕也せ繝ｪ繧ｹ繝・/h2>
+      <h2>視点リスト</h2>
       <div class="tool-row">
-        <button type="button" id="walker-toggle" class="${ui.showWalker !== false ? "active" : ""}" aria-pressed="${ui.showWalker !== false ? "true" : "false"}">${ui.showWalker !== false ? "繧ｭ繝｣繝ｩ繧ｯ繧ｿ繝ｼ繧帝國縺・ : "繧ｭ繝｣繝ｩ繧ｯ繧ｿ繝ｼ繧定｡ｨ遉ｺ"}</button>
-        <button type="button" id="lights-toggle" class="${ui.showLights !== false ? "active" : ""}" aria-pressed="${ui.showLights !== false ? "true" : "false"}">${ui.showLights !== false ? "辣ｧ譏弱ｒ髫縺・ : "辣ｧ譏弱ｒ陦ｨ遉ｺ"}</button>
+        <button type="button" id="walker-toggle" class="${ui.showWalker !== false ? "active" : ""}" aria-pressed="${ui.showWalker !== false ? "true" : "false"}">${ui.showWalker !== false ? "キャラクターを隠す" : "キャラクターを表示"}</button>
+        <button type="button" id="lights-toggle" class="${ui.showLights !== false ? "active" : ""}" aria-pressed="${ui.showLights !== false ? "true" : "false"}">${ui.showLights !== false ? "照明を隠す" : "照明を表示"}</button>
       </div>
-      <label>蜈ｨ菴鍋・譏・0-10<input id="world-light-level" type="range" min="0" max="10" step="1" value="${ui.worldLightLevel}" /></label>
-      <label class="check"><input id="show-env" type="checkbox" ${ui.showEnv ? "checked" : ""} /> 迺ｰ蠅・・濶ｲ縺ｨ遏｢蜊ｰ繧定｡ｨ遉ｺ</label>
-      <button type="button" id="add-view">隕也せ繧定ｿｽ蜉</button>
-      <button type="button" id="shot">逕ｻ蜒上ｒ譖ｸ縺榊・縺・/button>
-      ${plan.settings.exported ? `<p class="note">譖ｸ縺榊・縺玲ｸ医∩</p>` : ""}
-      ${views || `<p class="note">縺ｾ縺隕也せ縺後≠繧翫∪縺帙ｓ縲・/p>`}
+      <label>全体照明 0-10<input id="world-light-level" type="range" min="0" max="10" step="1" value="${ui.worldLightLevel}" /></label>
+      <label class="check"><input id="show-env" type="checkbox" ${ui.showEnv ? "checked" : ""} /> 環境の色と矢印を表示</label>
+      <button type="button" id="add-view">視点を追加</button>
+      <button type="button" id="shot">画像を書き出す</button>
+      ${plan.settings.exported ? `<p class="note">書き出し済み</p>` : ""}
+      ${views || `<p class="note">まだ視点がありません。</p>`}
     </div>
   `;
 }
@@ -572,17 +572,17 @@ function propsPanel() {
   if (!sel) return `<div class="props"></div>`;
   if (sel.objs.length > 1) {
     const group = sel.kind === "item" ? `
-      <button type="button" id="group-sel">繧ｰ繝ｫ繝ｼ繝・/button>
-      <button type="button" id="ungroup-sel">繧ｰ繝ｫ繝ｼ繝苓ｧ｣髯､</button>
-      <button type="button" id="rotate">蝗櫁ｻ｢</button>
+      <button type="button" id="group-sel">グループ</button>
+      <button type="button" id="ungroup-sel">グループ解除</button>
+      <button type="button" id="rotate">回転</button>
       <button type="button" id="lock-sel">Lock</button>
       <button type="button" id="unlock-sel">Unlock</button>
     ` : "";
-    return `<div class="props"><h2>${sel.objs.length} 莉ｶ繧帝∈謚・/h2>${group}<button type="button" id="dup">隍・｣ｽ</button><button type="button" id="delete-sel">蜑企勁</button></div>`;
+    return `<div class="props"><h2>${sel.objs.length} 件を選択</h2>${group}<button type="button" id="dup">複製</button><button type="button" id="delete-sel">削除</button></div>`;
   }
   if (sel.kind === "room") return roomProps(sel.objs[0]);
   if (sel.kind === "opening") return openingProps(sel.objs[0]);
-  if (sel.kind === "underlay") return `<div class="props"><h2>荳狗ｵｵ</h2><button type="button" id="delete-sel">蜑企勁</button></div>`;
+  if (sel.kind === "underlay") return `<div class="props"><h2>下絵</h2><button type="button" id="delete-sel">削除</button></div>`;
   return itemProps(sel.objs[0]);
 }
 
@@ -599,32 +599,32 @@ function openingProps(opening) {
   const leaf = plan.items.find((entry) => entry.openingId === opening.id);
   const cat = leaf ? lookupItem(leaf.catalogId, plan.customItems) : null;
   const swing = cat?.swing || (leaf?.leaf === "window" ? "window" : "");
-  const names = { full: "螢∵栢縺・, hole: "髢句哨驛ｨ", waist: "閻ｰ螢・ };
+  const names = { full: "壁抜き", hole: "開口部", waist: "腰壁" };
   const selectedId = shownDoorId(opening, leaf);
   const options = [
-    ["", "蟒ｺ蜈ｷ縺ｪ縺・],
-    ["door", "蟾ｦ髢九″"],
-    ["door-right", "蜿ｳ髢九″"],
-    ["door-double", "荳｡髢九″"],
-    ["door-push", "謚ｼ縺玲虻"],
-    ["door-slide", "蠑輔″謌ｸ"],
-    ["window", "遯・],
+    ["", "建具なし"],
+    ["door", "左開き"],
+    ["door-right", "右開き"],
+    ["door-double", "両開き"],
+    ["door-push", "押し戸"],
+    ["door-slide", "引き戸"],
+    ["window", "窓"],
   ].map(([id, name]) => `<option value="${id}" ${selectedId === id ? "selected" : ""}>${name}</option>`).join("");
   const hinge = leaf?.leaf === "door" && swing !== "double" && swing !== "window"
-    ? `<button type="button" id="leaf-hinge">${swing === "slide" ? "蠑輔″譁ｹ蜷代ｒ蜿榊ｯｾ縺ｫ縺吶ｋ" : "蜷雁・繧貞渚蟇ｾ縺ｫ縺吶ｋ"}</button>`
+    ? `<button type="button" id="leaf-hinge">${swing === "slide" ? "引き方向を反対にする" : "吊元を反対にする"}</button>`
     : "";
   const color = leaf
-    ? `<label>濶ｲ<input id="leaf-color" type="color" value="${leaf.color || "#c9a27a"}" /></label>`
+    ? `<label>色<input id="leaf-color" type="color" value="${leaf.color || "#c9a27a"}" /></label>`
     : "";
   return `<div class="props">
-    <h2>${names[opening.preset] || "髢句哨"}</h2>
-    <label>蟷・mm<input data-field="w" type="number" min="200" value="${Math.round(opening.w)}" /></label>
-    <label>鬮倥＆ mm<input data-field="h" type="number" min="200" value="${Math.round(opening.h)}" /></label>
-    <label>蠎翫°繧峨・鬮倥＆ mm<input data-field="sill" type="number" min="0" value="${Math.round(opening.sill)}" /></label>
-    <label>蟒ｺ蜈ｷ<select id="leaf-type">${options}</select></label>
+    <h2>${names[opening.preset] || "開口"}</h2>
+    <label>幅 mm<input data-field="w" type="number" min="200" value="${Math.round(opening.w)}" /></label>
+    <label>高さ mm<input data-field="h" type="number" min="200" value="${Math.round(opening.h)}" /></label>
+    <label>床からの高さ mm<input data-field="sill" type="number" min="0" value="${Math.round(opening.sill)}" /></label>
+    <label>建具<select id="leaf-type">${options}</select></label>
     ${color}
     ${hinge}
-    <button type="button" id="delete-sel">蜑企勁</button>
+    <button type="button" id="delete-sel">削除</button>
   </div>`;
 }
 
@@ -632,25 +632,25 @@ function roomProps(room) {
   const pick = ui.wallPick?.roomId === room.id ? ui.wallPick : null;
   const edge = pick?.edgeIndex != null ? room.edges?.[pick.edgeIndex] : null;
   return `<div class="props">
-    <h2>${escapeHtml(room.name || "驛ｨ螻・)}</h2>
-    <p class="note">蠎企擇遨・${(roomArea(room) / 1e6).toFixed(2)} 緕｡</p>
-    <label>蜷咲ｧｰ<input data-field="name" data-kind="text" type="text" value="${escapeHtml(room.name || "")}" /></label>
-    <label>蟷・mm<input data-field="w" type="number" value="${Math.round(room.w)}" /></label>
-    <label>螂･陦・mm<input data-field="h" type="number" value="${Math.round(room.h)}" /></label>
-    <label>蠎頑攝<input data-field="floorFinish" data-kind="text" type="text" value="${escapeHtml(room.floorFinish || "蠎・)}" /></label>
-    <label>蠎翫・濶ｲ<input data-field="floorColor" data-kind="color" type="color" value="${room.floorColor || room.color}" /></label>
-    <label>螢∵攝<input data-field="wallFinish" data-kind="text" type="text" value="${escapeHtml(room.wallFinish || "螢・)}" /></label>
-    <label>螢√・濶ｲ<input data-field="wallColor" data-kind="color" type="color" value="${room.wallColor || "#8e98a3"}" /></label>
-    <label>荳九′繧雁､ｩ莠・mm<input data-field="dropCeiling" type="number" min="0" value="${Math.round(room.dropCeiling || 0)}" /></label>
-    <label>荳翫￡蠎・mm<input data-field="raisedFloor" type="number" min="0" value="${Math.round(room.raisedFloor || 0)}" /></label>
-    <button type="button" id="add-vertex">鬆らせ繧定ｿｽ蜉</button>
-    <button type="button" id="remove-vertex">鬆らせ繧貞炎髯､</button>
-    <label>蜀・ｼｧ縺ｮ蜊雁ｾ・mm<input id="arc-radius" type="number" min="100" value="${edge?.radius ? Math.round(edge.radius) : 2000}" /></label>
-    <button type="button" id="arc-edge">縺薙・霎ｺ繧貞・蠑ｧ縺ｫ縺吶ｋ</button>
-    <button type="button" id="arc-flip">蜀・ｼｧ縺ｮ蜷代″繧貞渚蟇ｾ</button>
-    <button type="button" id="straight-edge">縺薙・霎ｺ繧堤峩邱壹↓謌ｻ縺・/button>
-    <button type="button" id="dup">隍・｣ｽ</button>
-    <button type="button" id="delete-sel">蜑企勁</button>
+    <h2>${escapeHtml(room.name || "部屋")}</h2>
+    <p class="note">床面積 ${(roomArea(room) / 1e6).toFixed(2)} ㎡</p>
+    <label>名称<input data-field="name" data-kind="text" type="text" value="${escapeHtml(room.name || "")}" /></label>
+    <label>幅 mm<input data-field="w" type="number" value="${Math.round(room.w)}" /></label>
+    <label>奥行 mm<input data-field="h" type="number" value="${Math.round(room.h)}" /></label>
+    <label>床材<input data-field="floorFinish" data-kind="text" type="text" value="${escapeHtml(room.floorFinish || "床")}" /></label>
+    <label>床の色<input data-field="floorColor" data-kind="color" type="color" value="${room.floorColor || room.color}" /></label>
+    <label>壁材<input data-field="wallFinish" data-kind="text" type="text" value="${escapeHtml(room.wallFinish || "壁")}" /></label>
+    <label>壁の色<input data-field="wallColor" data-kind="color" type="color" value="${room.wallColor || "#8e98a3"}" /></label>
+    <label>下がり天井 mm<input data-field="dropCeiling" type="number" min="0" value="${Math.round(room.dropCeiling || 0)}" /></label>
+    <label>上げ床 mm<input data-field="raisedFloor" type="number" min="0" value="${Math.round(room.raisedFloor || 0)}" /></label>
+    <button type="button" id="add-vertex">頂点を追加</button>
+    <button type="button" id="remove-vertex">頂点を削除</button>
+    <label>円弧の半径 mm<input id="arc-radius" type="number" min="100" value="${edge?.radius ? Math.round(edge.radius) : 2000}" /></label>
+    <button type="button" id="arc-edge">この辺を円弧にする</button>
+    <button type="button" id="arc-flip">円弧の向きを反対</button>
+    <button type="button" id="straight-edge">この辺を直線に戻す</button>
+    <button type="button" id="dup">複製</button>
+    <button type="button" id="delete-sel">削除</button>
   </div>`;
 }
 
@@ -713,7 +713,7 @@ function hostLine(entry) {
   if (!entry.hostId) return "";
   const host = store.get().items.find((row) => row.id === entry.hostId);
   if (!host) return "";
-  return `<p class="note">霈峨▲縺ｦ縺・ｋ蜿ｰ: ${escapeHtml(host.name)}</p><button type="button" id="drop-floor">蠎翫↓荳九ｍ縺・/button>`;
+  return `<p class="note">載っている台: ${escapeHtml(host.name)}</p><button type="button" id="drop-floor">床に下ろす</button>`;
 }
 
 function settleAround(plan, id) {
@@ -727,46 +727,46 @@ function itemProps(entry) {
   const wall = entry.place === "wall";
   const isLight = !!entry.light;
   const light = isLight ? `
-    <label>蜿紋ｻ倬ｫ倥＆ mm<input data-field="z" type="number" min="50" value="${Math.round(entry.z || 0)}" ${read} /></label>
-    <label class="check"><input id="light-on" type="checkbox" ${entry.lightOn !== false ? "checked" : ""} /> 轤ｹ轣ｯ</label>
-    <label>譏弱ｋ縺・1-20<input id="light-level" type="range" min="1" max="20" value="${clamp(Number(entry.lightLevel) || 10, 1, 20)}" /></label>
-    <label>蜈峨・濶ｲ<input data-field="lightColor" data-kind="color" type="color" value="${entry.lightColor || "#fff4d6"}" /></label>
+    <label>取付高さ mm<input data-field="z" type="number" min="50" value="${Math.round(entry.z || 0)}" ${read} /></label>
+    <label class="check"><input id="light-on" type="checkbox" ${entry.lightOn !== false ? "checked" : ""} /> 点灯</label>
+    <label>明るさ 1-20<input id="light-level" type="range" min="1" max="20" value="${clamp(Number(entry.lightLevel) || 10, 1, 20)}" /></label>
+    <label>光の色<input data-field="lightColor" data-kind="color" type="color" value="${entry.lightColor || "#fff4d6"}" /></label>
   ` : "";
-  const home = entry.residential ? `<label>繝・じ繧､繝ｳ<input data-field="design" data-kind="text" type="text" value="${escapeHtml(entry.design || "")}" /></label>` : "";
+  const home = entry.residential ? `<label>デザイン<input data-field="design" data-kind="text" type="text" value="${escapeHtml(entry.design || "")}" /></label>` : "";
   const heightField = wall && !isLight
-    ? `<label>蜿紋ｻ倬ｫ倥＆ mm<input data-field="z" type="number" value="${Math.round(entry.z || 0)}" ${read} /></label>`
+    ? `<label>取付高さ mm<input data-field="z" type="number" value="${Math.round(entry.z || 0)}" ${read} /></label>`
     : "";
-  const rotField = wall && !isLight ? "" : `<label>隗貞ｺｦ<input data-field="rot" type="number" step="1" value="${entry.rot}" ${read} /></label>`;
+  const rotField = wall && !isLight ? "" : `<label>角度<input data-field="rot" type="number" step="1" value="${entry.rot}" ${read} /></label>`;
   return `<div class="props">
     <h2>${escapeHtml(entry.name)}</h2>
-    ${locked ? `<p class="note">Lock荳ｭ</p>` : ""}
-    <label>蟷・mm<input data-field="w" type="number" min="50" value="${Math.round(entry.w)}" ${read} /></label>
-    <label>螂･陦・mm<input data-field="d" type="number" min="50" value="${Math.round(entry.d)}" ${read} /></label>
-    <label>鬮倥＆ mm<input data-field="h" type="number" min="50" value="${Math.round(entry.h)}" ${read} /></label>
+    ${locked ? `<p class="note">Lock中</p>` : ""}
+    <label>幅 mm<input data-field="w" type="number" min="50" value="${Math.round(entry.w)}" ${read} /></label>
+    <label>奥行 mm<input data-field="d" type="number" min="50" value="${Math.round(entry.d)}" ${read} /></label>
+    <label>高さ mm<input data-field="h" type="number" min="50" value="${Math.round(entry.h)}" ${read} /></label>
     ${heightField}
     ${rotField}
     ${hostLine(entry)}
-    <label>濶ｲ<input data-field="color" data-kind="color" type="color" value="${entry.color || "#cccccc"}" /></label>
-    <label>蜊倅ｾ｡<input data-field="price" data-kind="price" type="number" min="0" placeholder="譛ｪ險ｭ螳・ value="${entry.price ?? ""}" /></label>
+    <label>色<input data-field="color" data-kind="color" type="color" value="${entry.color || "#cccccc"}" /></label>
+    <label>単価<input data-field="price" data-kind="price" type="number" min="0" placeholder="未設定" value="${entry.price ?? ""}" /></label>
     <details>
-      <summary>險ｭ蛯・/summary>
-      <label>繝｡繝ｼ繧ｫ繝ｼ<input data-field="maker" data-kind="text" type="text" value="${escapeHtml(entry.maker || "")}" /></label>
-      <label>蝙句ｼ・input data-field="model" data-kind="text" type="text" value="${escapeHtml(entry.model || "")}" /></label>
-      <label>驥埼㍼ kg<input data-field="weightKg" type="number" min="0" value="${entry.weightKg ?? ""}" /></label>
-      <label>CO2謗貞・驥・kt<input data-field="co2Kt" type="number" min="0" step="any" value="${entry.co2Kt ?? ""}" /></label>
-      <label>髮ｻ豌・input data-field="power" data-kind="text" type="text" value="${escapeHtml(entry.power || "")}" /></label>
-      <label>邨ｦ豌ｴ<input data-field="water" data-kind="text" type="text" value="${escapeHtml(entry.water || "")}" /></label>
-      <label>謗呈ｰｴ<input data-field="drain" data-kind="text" type="text" value="${escapeHtml(entry.drain || "")}" /></label>
-      <label>邨ｦ豌・input data-field="supplyAir" data-kind="text" type="text" value="${escapeHtml(entry.supplyAir || "")}" /></label>
-      <label>謗呈ｰ・input data-field="exhaust" data-kind="text" type="text" value="${escapeHtml(entry.exhaust || "")}" /></label>
-      <label>迚ｹ繧ｬ繧ｹ<input data-field="gas" data-kind="text" type="text" value="${escapeHtml(entry.gas || "")}" /></label>
-      <label>蛯呵・input data-field="note" data-kind="text" type="text" value="${escapeHtml(entry.note || "")}" /></label>
+      <summary>設備</summary>
+      <label>メーカー<input data-field="maker" data-kind="text" type="text" value="${escapeHtml(entry.maker || "")}" /></label>
+      <label>型式<input data-field="model" data-kind="text" type="text" value="${escapeHtml(entry.model || "")}" /></label>
+      <label>重量 kg<input data-field="weightKg" type="number" min="0" value="${entry.weightKg ?? ""}" /></label>
+      <label>CO2排出量 kt<input data-field="co2Kt" type="number" min="0" step="any" value="${entry.co2Kt ?? ""}" /></label>
+      <label>電気<input data-field="power" data-kind="text" type="text" value="${escapeHtml(entry.power || "")}" /></label>
+      <label>給水<input data-field="water" data-kind="text" type="text" value="${escapeHtml(entry.water || "")}" /></label>
+      <label>排水<input data-field="drain" data-kind="text" type="text" value="${escapeHtml(entry.drain || "")}" /></label>
+      <label>給気<input data-field="supplyAir" data-kind="text" type="text" value="${escapeHtml(entry.supplyAir || "")}" /></label>
+      <label>排気<input data-field="exhaust" data-kind="text" type="text" value="${escapeHtml(entry.exhaust || "")}" /></label>
+      <label>特ガス<input data-field="gas" data-kind="text" type="text" value="${escapeHtml(entry.gas || "")}" /></label>
+      <label>備考<input data-field="note" data-kind="text" type="text" value="${escapeHtml(entry.note || "")}" /></label>
     </details>
     ${home}
     ${light}
-    ${wall || locked ? "" : `<button type="button" id="rotate">蝗櫁ｻ｢</button>`}
-    <button type="button" id="dup">隍・｣ｽ</button>
-    <button type="button" id="delete-sel">蜑企勁</button>
+    ${wall || locked ? "" : `<button type="button" id="rotate">回転</button>`}
+    <button type="button" id="dup">複製</button>
+    <button type="button" id="delete-sel">削除</button>
     <label class="check lock-check">Lock<input id="item-lock" type="checkbox" ${locked ? "checked" : ""} /></label>
   </div>`;
 }
@@ -835,7 +835,7 @@ function bindProps() {
       if (leaf.catalogId === "door" || leaf.catalogId === "door-right") {
         const right = hingeForHand(opening.wallSide, "right") === leaf.hinge;
         leaf.catalogId = right ? "door-right" : "door";
-        leaf.name = right ? "蜿ｳ髢九″" : "蟾ｦ髢九″";
+        leaf.name = right ? "右開き" : "左開き";
       }
     });
     renderSidebar();
@@ -912,7 +912,7 @@ function addCustomItem() {
   const entry = {
     id,
     name,
-    category: ["霑ｽ蜉蝎ｨ蜈ｷ"],
+    category: ["追加器具"],
     w: clamp(Number(sidebar.querySelector("#custom-w").value) || 900, 10, 20000),
     d: clamp(Number(sidebar.querySelector("#custom-d").value) || 600, 10, 20000),
     h: clamp(Number(sidebar.querySelector("#custom-h").value) || 800, 10, 8000),
@@ -1156,10 +1156,10 @@ function renderPlanList() {
 }
 
 function planCard(plan, current) {
-  const meta = `${formatPlanTime(plan.updatedAt)}縲驛ｨ螻・${plan.preview.rooms.length}縲蝎ｨ蜈ｷ ${plan.preview.items.length}${current ? "縲髢九＞縺ｦ縺・∪縺・ : ""}`;
+  const meta = `${formatPlanTime(plan.updatedAt)}　部屋 ${plan.preview.rooms.length}　器具 ${plan.preview.items.length}${current ? "　開いています" : ""}`;
   const actions = `
-    <button type="button" data-copy="${plan.id}">隍・｣ｽ</button>
-    <button type="button" data-del="${plan.id}">蜑企勁</button>
+    <button type="button" data-copy="${plan.id}">複製</button>
+    <button type="button" data-del="${plan.id}">削除</button>
   `;
   if (planList.view === "thumb") {
     return `
@@ -1186,14 +1186,14 @@ function planCard(plan, current) {
 
 function planPager(page, pages, start, count, total) {
   const marks = pageWindow(page, pages).map((entry) => {
-    if (entry === "gap") return `<span class="plan-page-gap">窶ｦ</span>`;
+    if (entry === "gap") return `<span class="plan-page-gap">…</span>`;
     return `<button type="button" data-page="${entry}"${entry === page ? ` class="active" aria-current="page"` : ""}>${entry + 1}</button>`;
   }).join("");
-  const range = total ? `${start + 1}窶・{start + count} / ${total}莉ｶ` : "0莉ｶ";
+  const range = total ? `${start + 1}–${start + count} / ${total}件` : "0件";
   return `
-    <button type="button" data-page="prev"${page === 0 ? " disabled" : ""}>蜑阪∈</button>
+    <button type="button" data-page="prev"${page === 0 ? " disabled" : ""}>前へ</button>
     ${marks}
-    <button type="button" data-page="next"${page >= pages - 1 ? " disabled" : ""}>谺｡縺ｸ</button>
+    <button type="button" data-page="next"${page >= pages - 1 ? " disabled" : ""}>次へ</button>
     <span class="plan-page-range">${range}</span>
   `;
 }
@@ -1211,7 +1211,7 @@ function pageWindow(page, pages) {
 }
 
 function formatPlanTime(value) {
-  if (!value) return "譖ｴ譁ｰ縺ｪ縺・;
+  if (!value) return "更新なし";
   const date = new Date(value);
   const month = date.getMonth() + 1;
   const day = date.getDate();
@@ -1231,7 +1231,7 @@ function planThumb(preview) {
   for (const room of rooms) bounds.push(...room.outline);
   for (const item of items) bounds.push(...itemCorners(item));
   if (!bounds.length) {
-    return `<svg class="plan-thumb-svg" viewBox="0 0 160 100" aria-hidden="true"><rect width="160" height="100" fill="#eef4f2"/><text x="80" y="54" text-anchor="middle" fill="#7b8c89" font-size="13">蝗ｳ髱｢縺ｪ縺・/text></svg>`;
+    return `<svg class="plan-thumb-svg" viewBox="0 0 160 100" aria-hidden="true"><rect width="160" height="100" fill="#eef4f2"/><text x="80" y="54" text-anchor="middle" fill="#7b8c89" font-size="13">図面なし</text></svg>`;
   }
   let minX = Infinity;
   let minY = Infinity;
@@ -1273,13 +1273,13 @@ function svgColor(value, fallback) {
 }
 
 const DETAIL_COLUMNS = [
-  ["name", "蜷咲ｧｰ"],
-  ["count", "謨ｰ驥・],
-  ["size", "蟷・怜･･陦古鈴ｫ倥＆ mm"],
-  ["weight", "驥埼㍼ kg"],
-  ["co2", "CO2謗貞・驥・kt"],
-  ["price", "蜊倅ｾ｡"],
-  ["amount", "驥鷹｡・],
+  ["name", "名称"],
+  ["count", "数量"],
+  ["size", "幅×奥行×高さ mm"],
+  ["weight", "重量 kg"],
+  ["co2", "CO2排出量 kt"],
+  ["price", "単価"],
+  ["amount", "金額"],
 ];
 const DETAIL_DEFAULT = ["name", "count", "size"];
 const DETAIL_KEY = "neosupo-star-beta8-detail-columns";
@@ -1318,11 +1318,11 @@ function detailHtml(plan) {
   const head = columns.map((id) => `<th>${escapeHtml(DETAIL_COLUMNS.find(([key]) => key === id)[1])}</th>`).join("");
   const rows = lines.map((line) => `<tr>${detailCells(line, columns).map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("");
   const summary = detailSummary(plan, columns);
-  const empty = columns.length ? `<tr><td colspan="${columns.length}">蝎ｨ蜈ｷ縺ｯ縺ｾ縺縺ゅｊ縺ｾ縺帙ｓ縲・/td></tr>` : "";
+  const empty = columns.length ? `<tr><td colspan="${columns.length}">器具はまだありません。</td></tr>` : "";
   return `
-    <p>${escapeHtml(plan.name)} / 螟ｩ莠暮ｫ・${plan.settings.ceiling}mm / 螢∝字 ${plan.settings.wall}mm</p>
+    <p>${escapeHtml(plan.name)} / 天井高 ${plan.settings.ceiling}mm / 壁厚 ${plan.settings.wall}mm</p>
     ${summary ? `<p>${summary}</p>` : ""}
-    ${columns.length ? `<table><thead><tr>${head}</tr></thead><tbody>${rows || empty}</tbody></table>` : `<p class="note">陦ｨ遉ｺ縺吶ｋ鬆・岼縺後≠繧翫∪縺帙ｓ縲り｡ｨ遉ｺ險ｭ螳壹°繧蛾∈繧薙〒縺上□縺輔＞縲・/p>`}
+    ${columns.length ? `<table><thead><tr>${head}</tr></thead><tbody>${rows || empty}</tbody></table>` : `<p class="note">表示する項目がありません。表示設定から選んでください。</p>`}
   `;
 }
 
@@ -1330,11 +1330,11 @@ function detailCells(line, columns) {
   return columns.map((id) => {
     if (id === "name") return escapeHtml(line.name);
     if (id === "count") return String(line.count);
-    if (id === "size") return `${line.w}ﾃ・{line.d}ﾃ・{line.h}`;
-    if (id === "weight") return line.weight == null ? "譛ｪ險ｭ螳・ : formatKg(line.weight);
-    if (id === "co2") return line.co2 == null ? "譛ｪ險ｭ螳・ : formatKg(line.co2);
-    if (id === "price") return line.price == null ? "譛ｪ險ｭ螳・ : `ﾂ･${line.price.toLocaleString()}`;
-    return line.price == null ? "譛ｪ險ｭ螳・ : `ﾂ･${(line.price * line.count).toLocaleString()}`;
+    if (id === "size") return `${line.w}×${line.d}×${line.h}`;
+    if (id === "weight") return line.weight == null ? "未設定" : formatKg(line.weight);
+    if (id === "co2") return line.co2 == null ? "未設定" : formatKg(line.co2);
+    if (id === "price") return line.price == null ? "未設定" : `¥${line.price.toLocaleString()}`;
+    return line.price == null ? "未設定" : `¥${(line.price * line.count).toLocaleString()}`;
   });
 }
 
@@ -1352,7 +1352,7 @@ function quoteLines(plan) {
     const price = priceOf(entry);
     const weight = weightOf(entry);
     const co2 = co2Of(entry);
-    const name = entry.design ? `${entry.name}・・{entry.design}・荏 : entry.name;
+    const name = entry.design ? `${entry.name}（${entry.design}）` : entry.name;
     const key = [name, entry.w, entry.d, entry.h, price, weight, co2].join("|");
     const found = groups.get(key) || { name, count: 0, w: entry.w, d: entry.d, h: entry.h, price, weight, co2 };
     found.count += 1;
@@ -1384,28 +1384,28 @@ function formatKg(value) {
 function totalLabel(plan) {
   const lines = quoteLines(plan);
   const priced = lines.filter((line) => line.price != null);
-  if (!priced.length) return "蜷郁ｨ・譛ｪ險ｭ螳・;
+  if (!priced.length) return "合計 未設定";
   const sum = priced.reduce((acc, line) => acc + line.price * line.count, 0);
   const missing = priced.length !== lines.length;
-  return `蜷郁ｨ・ﾂ･${sum.toLocaleString()}${missing ? "・域悴險ｭ螳壹≠繧奇ｼ・ : ""}`;
+  return `合計 ¥${sum.toLocaleString()}${missing ? "（未設定あり）" : ""}`;
 }
 
 function weightLabel(plan) {
   const lines = quoteLines(plan);
   const weighed = lines.filter((line) => line.weight != null);
-  if (!weighed.length) return "驥埼㍼蜷郁ｨ・譛ｪ險ｭ螳・;
+  if (!weighed.length) return "重量合計 未設定";
   const sum = weighed.reduce((acc, line) => acc + line.weight * line.count, 0);
   const missing = weighed.length !== lines.length;
-  return `驥埼㍼蜷郁ｨ・${formatKg(sum)} kg${missing ? "・域悴險ｭ螳壹≠繧奇ｼ・ : ""}`;
+  return `重量合計 ${formatKg(sum)} kg${missing ? "（未設定あり）" : ""}`;
 }
 
 function co2Label(plan) {
   const lines = quoteLines(plan);
   const known = lines.filter((line) => line.co2 != null);
-  if (!known.length) return "CO2蜷郁ｨ・譛ｪ險ｭ螳・;
+  if (!known.length) return "CO2合計 未設定";
   const sum = known.reduce((acc, line) => acc + line.co2 * line.count, 0);
   const missing = known.length !== lines.length;
-  return `CO2蜷郁ｨ・${formatKg(sum)} kt${missing ? "・域悴險ｭ螳壹≠繧奇ｼ・ : ""}`;
+  return `CO2合計 ${formatKg(sum)} kt${missing ? "（未設定あり）" : ""}`;
 }
 
 async function saveView() {
@@ -1415,7 +1415,7 @@ async function saveView() {
   const id = uid();
   const index = store.get().views.length + 1;
   store.update((plan) => {
-    plan.views.push({ id, name: `隕也せ ${index}`, pose });
+    plan.views.push({ id, name: `視点 ${index}`, pose });
   });
   renderSidebar();
 }
@@ -1528,7 +1528,7 @@ function loadPlanLights(tab) {
 
 function createController() {
   const listeners = new Set();
-  const state = { tab: "layout", tool: "select", showPlaced: localStorage.getItem("neosupo-star-beta8-layout-items") !== "0", showWalker: localStorage.getItem("neosupo-star-beta8-walker") !== "0", showLights: localStorage.getItem("neosupo-star-beta8-lights") !== "0", showPlanLights: loadPlanLights("layout"), worldLightLevel: loadWorldLightLevel(), showDims: localStorage.getItem("neosupo-star-beta8-dims") === "1", showEnv: false, showEnvLegend: localStorage.getItem("neosupo-star-beta8-env-legend") !== "0", envLegendPos: (() => { try { return JSON.parse(localStorage.getItem("neosupo-star-beta8-env-legend-pos") || "null"); } catch { return null; } })(), envGrade: "B", envFlow: "enter", catalogId: null, roomType: "螳滄ｨ灘ｮ､", roomColor: "#d5e4f2", selection: null, wallPick: null, powerSymbol: null, powerPrompt: null };
+  const state = { tab: "layout", tool: "select", showPlaced: localStorage.getItem("neosupo-star-beta8-layout-items") !== "0", showWalker: localStorage.getItem("neosupo-star-beta8-walker") !== "0", showLights: localStorage.getItem("neosupo-star-beta8-lights") !== "0", showPlanLights: loadPlanLights("layout"), worldLightLevel: loadWorldLightLevel(), showDims: localStorage.getItem("neosupo-star-beta8-dims") === "1", showEnv: false, showEnvLegend: localStorage.getItem("neosupo-star-beta8-env-legend") !== "0", envLegendPos: (() => { try { return JSON.parse(localStorage.getItem("neosupo-star-beta8-env-legend-pos") || "null"); } catch { return null; } })(), envGrade: "B", envFlow: "enter", catalogId: null, roomType: "実験室", roomColor: "#d5e4f2", selection: null, wallPick: null, powerSymbol: null, powerPrompt: null };
   function emit() {
     listeners.forEach((fn) => fn());
   }
@@ -1596,14 +1596,14 @@ function createController() {
       }
       emit();
     },
-    setShowDims(shown) {
-      state.showDims = !!shown;
-      localStorage.setItem("neosupo-star-beta8-dims", state.showDims ? "1" : "0");
-      emit();
-    },
     setWorldLightLevel(level) {
       state.worldLightLevel = clamp(Math.round(Number(level) || 0), 0, 10);
       localStorage.setItem("neosupo-star-beta8-world-light-level", String(state.worldLightLevel));
+      emit();
+    },
+    setShowDims(shown) {
+      state.showDims = !!shown;
+      localStorage.setItem("neosupo-star-beta8-dims", state.showDims ? "1" : "0");
       emit();
     },
     setShowEnv(shown) {
